@@ -258,7 +258,7 @@ def daemon(ctx: typer.Context) -> None:
 
     cfg = _config(ctx)
     try:
-        asyncio.run(run_daemon(cfg))
+        run_daemon(cfg)
     except KeyboardInterrupt:
         pass
 

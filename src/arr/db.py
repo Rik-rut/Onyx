@@ -67,6 +67,14 @@ class DB:
         self._conn = sqlite3.connect(str(self.path))
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(SCHEMA)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(downloads)")}
+        for col, typ in (("year", "INTEGER"), ("imdb_id", "TEXT"), ("episode_title", "TEXT")):
+            if col not in cols:
+                self._conn.execute(f"ALTER TABLE downloads ADD COLUMN {col} {typ}")
+        self._conn.commit()
 
     def close(self) -> None:
         self._conn.close()
@@ -83,8 +91,8 @@ class DB:
         try:
             self._conn.execute(
                 "INSERT INTO downloads (infohash, state, created_at, updated_at, media_type, "
-                "tmdb_id, title, season, episode, indexer, download_dir) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                "tmdb_id, title, season, episode, indexer, download_dir, year, imdb_id, "
+                "episode_title) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     infohash,
                     fields.get("state", DownloadState.QUEUED.value),
@@ -97,6 +105,9 @@ class DB:
                     fields.get("episode"),
                     fields.get("indexer"),
                     fields.get("download_dir"),
+                    fields.get("year"),
+                    fields.get("imdb_id"),
+                    fields.get("episode_title"),
                 ),
             )
             self._conn.commit()

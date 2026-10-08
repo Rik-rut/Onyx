@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import os
 import shutil
+from collections.abc import Callable
 from pathlib import Path
 
 from arr.core.models import Series
@@ -46,6 +47,24 @@ def subtitle_files(root: Path) -> list[Path]:
         if p.is_file() and p.suffix.lower() in SUB_EXTS:
             out.append(p)
     return out
+
+
+def find_episode_file(root: Path, season: int, episode: int) -> Path | None:
+    """Locate the media file matching SxxExx (or NxNN) inside a directory."""
+    tag = f"s{season:02d}e{episode:02d}"
+    alt = f"{season}x{episode:02d}"
+    for p in media_files(root):
+        n = p.name.lower().replace(".", " ").replace("_", " ").replace("-", " ")
+        if tag in n or alt in n:
+            return p
+    return None
+
+
+def matches_episode(path: Path, season: int, episode: int) -> bool:
+    tag = f"s{season:02d}e{episode:02d}"
+    alt = f"{season}x{episode:02d}"
+    n = path.name.lower().replace(".", " ").replace("_", " ").replace("-", " ")
+    return tag in n or alt in n
 
 
 def movie_dest(library_root: Path, title: str, year: int | None, ext: str) -> Path:
@@ -113,9 +132,17 @@ def rename_subtitle(src: Path, media_dst: Path, lang: str = "en") -> Path:
     return src.with_name(f"{media_dst.stem}.{lang}{src.suffix}")
 
 
-def import_subtitles(root: Path, media_dst: Path, *, lang: str = "en") -> list[Path]:
+def import_subtitles(
+    root: Path,
+    media_dst: Path,
+    *,
+    lang: str = "en",
+    only: Callable[[Path], bool] | None = None,
+) -> list[Path]:
     out = []
     for s in subtitle_files(root):
+        if only is not None and not only(s):
+            continue
         name = s.name.lower()
         tokens = name.replace(".", " ").replace("_", " ").replace("-", " ").split()
         langs = {"en", "eng", "english"}
