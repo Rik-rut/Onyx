@@ -52,12 +52,14 @@ def _neg_date(s: str) -> str:
 
 
 class OpenSubtitlesClient:
-    BASE = "https://api.opensubtitles.com/api/v1"
+    DEFAULT_BASE = "https://api.opensubtitles.com/api/v1"
+    BASE = DEFAULT_BASE
 
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: str, base_url: str | None = None):
         if not api_key:
             raise OpenSubtitlesError("opensubtitles_api_key is not configured")
         self.api_key = api_key
+        self.BASE = (base_url or OpenSubtitlesClient.DEFAULT_BASE).rstrip("/")
         self.headers = {"Api-Key": api_key, "User-Agent": "arr v0.1"}
 
     def search(

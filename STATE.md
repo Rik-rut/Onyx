@@ -2,7 +2,7 @@
 
 Status: IN_PROGRESS
 
-Iteration: 6
+Iteration: 7
 
 Current Objective:
 Scaffold complete; proceed to release parsing/ranking and core domain wiring.
@@ -27,8 +27,10 @@ Completed:
 - Added `src/arr/subtitles/service.py` (`ensure_subtitles`: sibling-subtitle detection first, `.ass`/`.sub`→`.srt` via ffmpeg when available else copy with original ext, OpenSubtitles fallback, `missing`/`quota_exceeded`/`error` recorded in DB, returns per-language records).
 - Implemented the download/monitor pipeline in `src/arr/pipeline.py`: `download_movie` (search→pick/auto→scope print→confirm unless --yes→dedupe via DB→transmission add→optional poll→import→ensure_subtitles→state machine), `download_tv` (scope string printing, candidate list, transmission add), `series_add/list/remove/check` (TMDB resolve + monitored_series CRUD + per-series due-episode count via select_airing), `list_queue/get_status/cancel_download/import_download`, and `run_daemon` (loop over monitor.loop.tick with series_fetcher/enqueue and configurable poll interval). DependencyUnavailable maps to SystemExit(4).
 
+- Added R13 launchers: `run.bat` (checks `uv`, prints install hint + `pause` on failure, `uv sync`, `uv run arr` / `--help` when no args, prints exit code + `pause` on non-zero) and `run.sh` mirror. Added README.md (install/run/config/command reference/scope rules/monitoring/layout/seeding/subtitles), LEGAL.md, GOTCHAS.md. R9 robustness greps: no pip/poetry/conda/venv references outside historical notes; indexer base URLs only in `config/settings.py` defaults (Nyaa namespace URI is an identifier, not a request target); OpenSubtitlesClient base now overridable via `base_url`.
+
 Current Work:
-Download/monitor pipeline + subtitle service wired; `arr` CLI loads and `version`/`--help` work. Next: R13 run.bat/run.sh, README/LEGAL/GOTCHAS docs, and the robustness pass (R9 greps for hardcoded domains and pip references).
+R13 launchers + docs + robustness pass done. Remaining: end-to-end smoke tests via run.bat (blocked on transmission-daemon install), download pipeline live verification, and final DoD checklist.
 
 Last Test Result:
 PASSED
@@ -37,7 +39,7 @@ Current Problem:
 transmission-daemon/transmission-remote not installed on this machine — R2 runtime integration tests and the R13 end-to-end smoke tests will hit exit-code-4 dependency-unavailable handling until Transmission is installed.
 
 Next Action:
-Implement R13 (`run.bat` + `run.sh`: uv check, `uv sync`, `uv run arr`, pause on error/no-args help), write README.md/LEGAL.md/GOTCHAS.md, then run the R9 robustness greps (no hardcoded indexer domains, no pip/venv references), and smoke `run.bat` paths that don't need a daemon.
+Best-effort smoke of `run.bat` paths that don't need a daemon (`run.bat version`, `run.bat --help`, `run.bat config path`), verify exit codes, and try installing `transmission-daemon` so the R2 integration test and end-to-end smoke can run. Then walk the Definition of Done.
 
 Last Updated:
-2026-10-08T01:15:35.091069+00:00
+2026-10-08T01:18:55.934241+00:00
