@@ -48,11 +48,17 @@ def tick(
     today: date | None = None,
     lookahead_days: int | None = None,
 ) -> list[int]:
-    """Run one monitor tick. Returns tmdb_ids that had episodes enqueued."""
+    """Run one monitor tick. Returns tmdb_ids that had episodes enqueued.
+
+    When ``unmonitor_ended_series`` is true, monitored shows whose status is
+    ``Ended``/``Canceled`` and that have no remaining episodes to download are
+    removed from monitoring.
+    """
     if lookahead_days is not None:
         lookahead = lookahead_days
     else:
         lookahead = int(cfg.get("monitor_lookahead_days", 7))
+    unmonitor_ended = bool(cfg.get("unmonitor_ended_series", False))
     enqueued_for: list[int] = []
     for m in db.list_monitored():
         try:
@@ -64,6 +70,9 @@ def tick(
             continue
         db.set_last_checked(int(m["id"]), _now())
         wanted = select_airing(series, db, today=today, lookahead_days=lookahead)
+        if is_ended_status(series.status) and unmonitor_ended and not wanted:
+            db.remove_monitored(int(m["id"]))
+            continue
         if not wanted:
             continue
         try:
@@ -80,6 +89,13 @@ def tick(
         if n:
             enqueued_for.append(int(m["tmdb_id"]))
     return enqueued_for
+
+
+ENDED_STATUSES = {"Ended", "Canceled", "Cancelled"}
+
+
+def is_ended_status(status: str | None) -> bool:
+    return str(status or "").strip() in ENDED_STATUSES
 
 
 def _now() -> float:

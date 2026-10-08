@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from arr.core.models import Episode, Series
+from arr.core.models import Episode, Release, Series
 from arr.db import DB
 
 
@@ -66,3 +66,21 @@ def episodes_in_season(series: Series, season: int) -> list[Episode]:
         if s.season_number == season:
             return list(s.episodes)
     return []
+
+
+def group_by_season(episodes: list[Episode]) -> dict[int, list[Episode]]:
+    out: dict[int, list[Episode]] = {}
+    for e in episodes:
+        out.setdefault(e.season_number, []).append(e)
+    return out
+
+
+def pick_season_pack(releases: list[Release]) -> Release | None:
+    """Best accepted season-pack release, or None.
+
+    `releases` is expected pre-sorted by rank; the first pack wins.
+    """
+    for r in releases:
+        if r.is_pack:
+            return r
+    return None

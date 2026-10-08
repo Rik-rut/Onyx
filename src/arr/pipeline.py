@@ -21,7 +21,12 @@ from arr.metadata.imdb import degrade as degrade_movie
 from arr.metadata.tvmaze import TvmazeClient, TvmazeError
 from arr.metadata.tvmaze import degrade as degrade_tv
 from arr.monitor.loop import select_airing, tick
-from arr.series.orchestration import mark_pack_imported, resolve_scope
+from arr.series.orchestration import (
+    group_by_season,
+    mark_pack_imported,
+    pick_season_pack,
+    resolve_scope,
+)
 from arr.subtitles.service import ensure_subtitles
 from arr.transmission.errors import DependencyUnavailable
 from arr.transmission.process import (
@@ -278,11 +283,15 @@ async def download_tv(
             return
 
     db = _db(cfg)
+    prefer_packs = pack or bool(cfg.get("prefer_season_packs", True))
     try:
         if season is None and episode is None:
-            n = await _enqueue_series_query(query, cfg, db, force=force)
+            n = await _enqueue_series_query(query, cfg, db, force=force, prefer_packs=prefer_packs)
         else:
-            n = await _enqueue_tv_scope(query, cfg, db, season=season, episode=episode, force=force)
+            n = await _enqueue_tv_scope(
+                query, cfg, db, season=season, episode=episode, force=force,
+                prefer_packs=prefer_packs,
+            )
     finally:
         db.close()
     if n == 0:
@@ -303,8 +312,8 @@ async def _resolve_series(query: str, cfg: Config) -> Series | None:
         return None
 
 
-async def _enqueue_series_query(query, cfg, db, *, force=False) -> int:
-    """Whole-series: resolve via TVMaze, enumerate missing episodes, enqueue one torrent each."""
+async def _enqueue_series_query(query, cfg, db, *, force=False, prefer_packs=None) -> int:
+    """Whole-series: resolve via TVMaze, enumerate missing episodes, enqueue."""
     series = await _resolve_series(query, cfg)
     if series is None:
         print(
@@ -314,17 +323,22 @@ async def _enqueue_series_query(query, cfg, db, *, force=False) -> int:
         return await _enqueue_tv_scope_by_search(
             query, cfg, db, season=None, episode=None, force=force
         )
-    return await _enqueue_episodes(series, resolve_scope(series), cfg, db, force=force)
+    return await _enqueue_episodes(
+        series, resolve_scope(series), cfg, db, force=force, prefer_packs=prefer_packs
+    )
 
 
-async def _enqueue_tv_scope(query, cfg, db, *, season, episode, force=False) -> int:
+async def _enqueue_tv_scope(
+    query, cfg, db, *, season, episode, force=False, prefer_packs=None
+) -> int:
     series = await _resolve_series(query, cfg)
     if series is None:
         return await _enqueue_tv_scope_by_search(
             query, cfg, db, season=season, episode=episode, force=force
         )
     return await _enqueue_episodes(
-        series, resolve_scope(series, season, episode), cfg, db, force=force
+        series, resolve_scope(series, season, episode), cfg, db,
+        force=force, prefer_packs=prefer_packs,
     )
 
 
@@ -357,13 +371,24 @@ async def _enqueue_tv_scope_by_search(query, cfg, db, *, season, episode, force=
 
 
 async def _enqueue_episodes(
-    series: Series, episodes: list[Episode], cfg, db, *, force=False
+    series: Series,
+    episodes: list[Episode],
+    cfg,
+    db,
+    *,
+    force=False,
+    prefer_packs: bool | None = None,
 ) -> int:
-    """Search + rank per missing episode; enqueue the best release for each.
+    """Search + rank missing episodes; enqueue the best release for each.
 
     `episodes` is the caller-chosen scope (whole series, a season, or one
     episode). Episodes already queued/downloaded/imported are skipped unless
     ``force`` is set, which keeps whole-series and monitor runs idempotent.
+
+    When ``prefer_packs`` is true (default from ``prefer_season_packs``), a
+    season whose missing episodes could be covered by an accepted season pack
+    enqueues the single pack instead of one torrent per episode. A pack marks
+    every episode in its season as covered.
     """
     if not episodes:
         return 0
@@ -378,6 +403,8 @@ async def _enqueue_episodes(
         ]
     if not needed:
         return 0
+    if prefer_packs is None:
+        prefer_packs = bool(cfg.get("prefer_season_packs", True))
     profile = QualityProfile(
         resolutions=list(cfg.get("resolutions") or ["2160p", "1080p", "720p"]),
         min_seeders=int(cfg.get("min_seeders", 1)),
@@ -385,32 +412,54 @@ async def _enqueue_episodes(
     staging = _staging_dir(cfg, "tv")
     limit = int(cfg.get("max_concurrent_downloads", 3))
 
-    # Phase 1: decide the best release per missing episode (network only).
-    plans: list[tuple[Episode, Release]] = []
+    # Phase 1: decide the best release per missing episode, preferring packs.
+    plans: list[tuple[list[Episode], Release]] = []
     seen_hashes: set[str] = set()
-    for ep in needed:
-        q = Query(
-            media_type=MediaType.TV,
-            text=series.title,
-            title=series.title,
-            imdb_id=series.imdb_id,
-            season=ep.season_number,
-            episode=ep.episode_number,
-        )
-        releases = await _fan_out(q, cfg)
-        scored = rank(releases, q, profile, cfg.values)
-        accepted = [s.release for s in scored if s.rejected is None]
-        if not accepted:
-            continue
-        chosen = accepted[0]
-        if chosen.infohash in seen_hashes or db.get_download(chosen.infohash):
-            db.set_episode_state(
-                series.tmdb_id, ep.season_number, ep.episode_number, "imported",
-                infohash=chosen.infohash,
+    for season, season_eps in group_by_season(needed).items():
+        pack: Release | None = None
+        per_episode: list[tuple[Episode, Release]] = []
+        for ep in season_eps:
+            q = Query(
+                media_type=MediaType.TV,
+                text=series.title,
+                title=series.title,
+                imdb_id=series.imdb_id,
+                season=ep.season_number,
+                episode=ep.episode_number,
             )
+            releases = await _fan_out(q, cfg)
+            scored = rank(releases, q, profile, cfg.values)
+            accepted = [s.release for s in scored if s.rejected is None]
+            if accepted:
+                if prefer_packs:
+                    chosen = accepted[0]
+                else:
+                    # prefer a per-episode release over a pack covering the season
+                    chosen = next((r for r in accepted if not r.is_pack), accepted[0])
+                per_episode.append((ep, chosen))
+                if pack is None and prefer_packs:
+                    pack = pick_season_pack(accepted)
+        if pack is not None:
+            covered = [ep for ep, _ in per_episode]
+            if pack.infohash in seen_hashes or db.get_download(pack.infohash):
+                for ep in season_eps:
+                    db.set_episode_state(
+                        series.tmdb_id, ep.season_number, ep.episode_number, "imported",
+                        infohash=pack.infohash,
+                    )
+                continue
+            seen_hashes.add(pack.infohash)
+            plans.append((covered if covered else list(season_eps), pack))
             continue
-        seen_hashes.add(chosen.infohash)
-        plans.append((ep, chosen))
+        for ep, chosen in per_episode:
+            if chosen.infohash in seen_hashes or db.get_download(chosen.infohash):
+                db.set_episode_state(
+                    series.tmdb_id, ep.season_number, ep.episode_number, "imported",
+                    infohash=chosen.infohash,
+                )
+                continue
+            seen_hashes.add(chosen.infohash)
+            plans.append(([ep], chosen))
 
     if not plans:
         return 0
@@ -425,31 +474,33 @@ async def _enqueue_episodes(
     paused_flags = plan_slots(active, limit, len(plans))
 
     count = 0
-    for (ep, chosen), paused in zip(plans, paused_flags):
+    for (covered, chosen), paused in zip(plans, paused_flags):
         try:
             await rpc.add_magnet(chosen.magnet, str(staging), paused=paused)
         except DependencyUnavailable as e:
             print(str(e), file=sys.stderr)
             raise SystemExit(4)
+        lead = covered[0]
         db.add_download(
             chosen.infohash,
             media_type="tv",
             tmdb_id=series.tmdb_id,
             title=series.title,
-            season=ep.season_number,
-            episode=ep.episode_number,
-            episode_title=ep.name,
+            season=lead.season_number,
+            episode=lead.episode_number if len(covered) == 1 else None,
+            episode_title=lead.name if len(covered) == 1 else None,
             imdb_id=series.imdb_id,
             year=series.year,
             indexer=chosen.indexer,
             download_dir=str(staging),
             state="queued" if paused else "added",
         )
-        db.set_episode_state(
-            series.tmdb_id, ep.season_number, ep.episode_number,
-            "queued" if paused else "added",
-            infohash=chosen.infohash,
-        )
+        state = "queued" if paused else "added"
+        for ep in covered:
+            db.set_episode_state(
+                series.tmdb_id, ep.season_number, ep.episode_number, state,
+                infohash=chosen.infohash,
+            )
         count += 1
     await _promote_queued(cfg, db)
     return count

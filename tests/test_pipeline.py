@@ -200,6 +200,115 @@ def test_enqueue_queues_beyond_concurrency_limit(tmp_path, monkeypatch):
     db.close()
 
 
+def test_enqueue_prefers_season_pack(tmp_path, monkeypatch):
+    """When a season pack is available and prefer_packs is on, one torrent covers the season."""
+    cfg = make_cfg(tmp_path)
+    db = DB(tmp_path / "arr.db")
+
+    added: list[str] = []
+
+    class Rpc:
+        def __init__(self, *a, **k):
+            pass
+
+        async def list_torrents(self):
+            return []
+
+        async def add_magnet(self, magnet, download_dir, paused=False):
+            added.append(magnet)
+            return {}
+
+        async def start(self, torrent_id):
+            return {}
+
+    monkeypatch.setattr(pipeline, "_rpc", lambda c: Rpc())
+
+    pack = Release(
+        indexer="eztv",
+        title="Show S01 COMPLETE 1080p WEB-DL x264",
+        infohash="packabc".ljust(40, "0"),
+        magnet="magnet:?xt=urn:btih:packabc",
+        media_type=MediaType.TV,
+        seeds=500,
+        size_bytes=8_000_000_000,
+        is_pack=True,
+    )
+
+    async def fake_fan_out(q, c):
+        return [pack, fake_release(q.episode)]
+
+    monkeypatch.setattr(pipeline, "_fan_out", fake_fan_out)
+    n = asyncio.run(
+        pipeline._enqueue_episodes(
+            make_series(), pipeline.resolve_scope(make_series()), cfg, db, prefer_packs=True
+        )
+    )
+    assert n == 1
+    assert len(added) == 1
+    assert db.episode_state(10, 1, 1) == "added"
+    assert db.episode_state(10, 1, 2) == "added"
+    db.close()
+
+
+def test_enqueue_pack_disabled_adds_per_episode(tmp_path, monkeypatch):
+    cfg = make_cfg(tmp_path)
+    db = DB(tmp_path / "arr.db")
+    added: list[str] = []
+
+    class Rpc:
+        def __init__(self, *a, **k):
+            pass
+
+        async def list_torrents(self):
+            return []
+
+        async def add_magnet(self, magnet, download_dir, paused=False):
+            added.append(magnet)
+            return {}
+
+        async def start(self, torrent_id):
+            return {}
+
+    monkeypatch.setattr(pipeline, "_rpc", lambda c: Rpc())
+
+    pack = Release(
+        indexer="eztv",
+        title="Show S01 COMPLETE 1080p",
+        infohash="packxyz".ljust(40, "0"),
+        magnet="magnet:?xt=urn:btih:packxyz",
+        media_type=MediaType.TV, seeds=500, size_bytes=8_000_000_000, is_pack=True,
+    )
+
+    async def fake_fan_out(q, c):
+        return [pack, fake_release(q.episode)]
+
+    monkeypatch.setattr(pipeline, "_fan_out", fake_fan_out)
+    n = asyncio.run(
+        pipeline._enqueue_episodes(
+            make_series(), pipeline.resolve_scope(make_series()), cfg, db, prefer_packs=False
+        )
+    )
+    assert n == 2
+    assert len(added) == 2
+    db.close()
+
+
+def test_group_by_season_and_pick_pack():
+    from arr.core.models import Release as R
+    from arr.series.orchestration import group_by_season, pick_season_pack
+
+    eps = make_series().all_episodes()
+    groups = group_by_season(eps)
+    assert set(groups) == {1} and len(groups[1]) == 2
+    pack = R(
+        indexer="x", title="Show S01 COMPLETE", infohash="h".ljust(40, "0"),
+        magnet="magnet:?xt=urn:btih:h", media_type=MediaType.TV, is_pack=True,
+    )
+    ep = fake_release(1)
+    assert pick_season_pack([ep, pack]) is pack
+    assert pick_season_pack([ep]) is None
+
+
 def test_import_movie_record(tmp_path, monkeypatch):
     cfg = make_cfg(tmp_path)
     db = DB(tmp_path / "arr.db")
