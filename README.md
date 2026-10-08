@@ -47,6 +47,7 @@ uv run mypy arr
 `~/.config/arr/config.toml` (Linux/macOS). Override with `--config <path>`.
 
 `arr config show` prints effective config with secrets redacted (`--show-secrets` to reveal).
+`--transmission-remote <path>` (global option) overrides the `transmission-remote` binary path.
 
 Key settings: `download_root`, `library_root`,
 `transmission_rpc_*`, `yts_base_url`/`eztv_base_url`/`nyaa_base_url`,

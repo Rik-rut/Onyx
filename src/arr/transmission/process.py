@@ -167,7 +167,11 @@ class RpcClient:
                         headers={"X-Transmission-Session-Id": self._session_id or ""},
                     )
         except httpx.HTTPError as e:
-            raise RpcError(f"RPC request failed: {e}") from e
+            # A refused/unreachable daemon is a dependency problem (exit 4), not
+            # a generic runtime error.
+            raise DependencyUnavailable(
+                f"transmission-daemon RPC unreachable at {self._base}: {e}"
+            ) from e
         if resp.status_code == 401:
             raise AuthError()
         if resp.status_code != 200:

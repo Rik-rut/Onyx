@@ -40,6 +40,9 @@ def _emit(data: Any, json_mode: bool) -> None:
 def _config(ctx: typer.Context):
     path = ctx.obj.get("config_path") if ctx.obj else None
     cfg = load_config(path)
+    override = ctx.obj.get("transmission_remote") if ctx.obj else None
+    if override:
+        cfg.values["transmission_remote"] = override
     configure_logging(cfg)
     return cfg
 
@@ -48,8 +51,14 @@ def _config(ctx: typer.Context):
 def main(
     ctx: typer.Context,
     config: str | None = typer.Option(None, "--config", help="Path to config.toml"),
+    transmission_remote: str | None = typer.Option(
+        None, "--transmission-remote", help="Path to the transmission-remote binary"
+    ),
 ) -> None:
-    ctx.obj = {"config_path": Path(config) if config else None}
+    ctx.obj = {
+        "config_path": Path(config) if config else None,
+        "transmission_remote": transmission_remote,
+    }
 
 
 @search_app.command("movie")
