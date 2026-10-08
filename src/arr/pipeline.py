@@ -24,7 +24,13 @@ from arr.monitor.loop import select_airing, tick
 from arr.series.orchestration import mark_pack_imported, resolve_scope
 from arr.subtitles.service import ensure_subtitles
 from arr.transmission.errors import DependencyUnavailable
-from arr.transmission.process import RpcClient
+from arr.transmission.process import (
+    RpcClient,
+    active_count,
+    is_active_torrent,
+    is_complete_torrent,
+    plan_slots,
+)
 
 DB_PATH = Path(".cache") / "arr" / "arr.db"
 
@@ -186,9 +192,20 @@ async def download_movie(
         db.close()
         return
     staging = _staging_dir(cfg, "movie")
+    rpc = _rpc(cfg)
+    limit = int(cfg.get("max_concurrent_downloads", 3))
+    paused = False
     try:
-        rpc = _rpc(cfg)
-        await rpc.add_magnet(chosen.magnet, str(staging))
+        active = active_count(await rpc.list_torrents())
+        paused = plan_slots(active, limit, 1)[0]
+    except DependencyUnavailable as e:
+        print(str(e), file=sys.stderr)
+        db.close()
+        raise SystemExit(4)
+    except Exception:
+        paused = False
+    try:
+        await rpc.add_magnet(chosen.magnet, str(staging), paused=paused)
     except DependencyUnavailable as e:
         print(str(e), file=sys.stderr)
         db.close()
@@ -202,12 +219,15 @@ async def download_movie(
         year=chosen.year,
         indexer=chosen.indexer,
         download_dir=str(staging),
-        state="added",
+        state="queued" if paused else "added",
     )
+    if paused:
+        print("Queued (max_concurrent_downloads reached).")
     if no_wait:
         print("Added (no-wait).")
         db.close()
         return
+    _promote_queued(cfg, db)
     # poll until completed (bounded), then import
     deadline = time.time() + 3600
     while time.time() < deadline:
@@ -215,7 +235,7 @@ async def download_movie(
             t = await rpc.get(chosen.infohash)
         except DependencyUnavailable:
             break
-        if t and (t.get("status") in (4, 6) or t.get("percentDone", 0) >= 1.0):
+        if t and is_complete_torrent(t):
             content = _torrent_content_path(t)
             db.set_download_state(
                 chosen.infohash, "completed",
@@ -363,7 +383,10 @@ async def _enqueue_episodes(
         min_seeders=int(cfg.get("min_seeders", 1)),
     )
     staging = _staging_dir(cfg, "tv")
-    count = 0
+    limit = int(cfg.get("max_concurrent_downloads", 3))
+
+    # Phase 1: decide the best release per missing episode (network only).
+    plans: list[tuple[Episode, Release]] = []
     seen_hashes: set[str] = set()
     for ep in needed:
         q = Query(
@@ -387,8 +410,24 @@ async def _enqueue_episodes(
             )
             continue
         seen_hashes.add(chosen.infohash)
+        plans.append((ep, chosen))
+
+    if not plans:
+        return 0
+
+    # Phase 2: add respecting max_concurrent_downloads. Queued -> paused=True.
+    rpc = _rpc(cfg)
+    active = 0
+    try:
+        active = active_count(await rpc.list_torrents())
+    except Exception:
+        active = 0
+    paused_flags = plan_slots(active, limit, len(plans))
+
+    count = 0
+    for (ep, chosen), paused in zip(plans, paused_flags):
         try:
-            await _rpc(cfg).add_magnet(chosen.magnet, str(staging))
+            await rpc.add_magnet(chosen.magnet, str(staging), paused=paused)
         except DependencyUnavailable as e:
             print(str(e), file=sys.stderr)
             raise SystemExit(4)
@@ -404,14 +443,54 @@ async def _enqueue_episodes(
             year=series.year,
             indexer=chosen.indexer,
             download_dir=str(staging),
-            state="added",
+            state="queued" if paused else "added",
         )
         db.set_episode_state(
-            series.tmdb_id, ep.season_number, ep.episode_number, "added",
+            series.tmdb_id, ep.season_number, ep.episode_number,
+            "queued" if paused else "added",
             infohash=chosen.infohash,
         )
         count += 1
+    await _promote_queued(cfg, db)
     return count
+
+
+async def _promote_queued(cfg: Config, db: DB) -> None:
+    """Start queued (paused) torrents while a free slot exists (best effort)."""
+    limit = int(cfg.get("max_concurrent_downloads", 3))
+    try:
+        rpc = _rpc(cfg)
+    except Exception:
+        return
+    try:
+        torrents = await rpc.list_torrents()
+    except Exception:
+        return
+    by_hash = {str(t.get("hashString", "")).lower(): t for t in torrents}
+    active = active_count(torrents)
+    if active >= limit:
+        return
+    for rec in db.list_downloads():
+        if active >= limit:
+            break
+        if rec.get("state") != "queued":
+            continue
+        t = by_hash.get(str(rec["infohash"]).lower())
+        if not t:
+            continue
+        try:
+            await rpc.start(t["id"])
+        except Exception:
+            continue
+        db.set_download_state(rec["infohash"], "downloading")
+        if rec.get("season") is not None and rec.get("episode") is not None:
+            db.set_episode_state(
+                int(rec.get("tmdb_id") or 0),
+                int(rec["season"]),
+                int(rec["episode"]),
+                "downloading",
+            )
+        active += 1
 
 
 async def _fan_out(q: Query, cfg: Config) -> list[Release]:
@@ -732,14 +811,14 @@ def _sync_rpc_state(cfg: Config, db: DB) -> None:
             t = by_hash.get(str(rec["infohash"]).lower())
             if not t:
                 continue
-            done = t.get("status") in (4, 6) or float(t.get("percentDone") or 0) >= 1.0
-            if not done:
-                continue
-            content = _torrent_content_path(t)
-            if content:
-                db.set_download_state(rec["infohash"], "completed", content_path=str(content))
-            else:
-                db.set_download_state(rec["infohash"], "completed")
+            if is_complete_torrent(t):
+                content = _torrent_content_path(t)
+                if content:
+                    db.set_download_state(rec["infohash"], "completed", content_path=str(content))
+                else:
+                    db.set_download_state(rec["infohash"], "completed")
+            elif rec.get("state") in ("added", "queued") and is_active_torrent(t):
+                db.set_download_state(rec["infohash"], "downloading")
 
     try:
         asyncio.run(_inner())
@@ -763,6 +842,10 @@ def run_daemon(cfg):
                 enqueue=lambda s, eps: _daemon_enqueue(s, eps, cfg, db),
             )
             _sync_rpc_state(cfg, db)
+            try:
+                asyncio.run(_promote_queued(cfg, db))
+            except RuntimeError:
+                pass
             imported = _poll_and_import(cfg, db)
             if imported:
                 print(f"Imported {imported} download(s).")

@@ -172,6 +172,44 @@ class RpcClient:
             raise RpcError(f"Torrent {torrent_id} not found")
         return await self._request("torrent-start", {"ids": [t["id"]]})
 
+    async def stop(self, torrent_id: int | str) -> dict:
+        t = await self.get(torrent_id)
+        if t is None:
+            raise RpcError(f"Torrent {torrent_id} not found")
+        return await self._request("torrent-stop", {"ids": [t["id"]]})
+
+
+# Transmission RPC torrent status codes.
+STOPPED = 0
+DOWNLOAD = 4
+SEED = 6
+
+
+def is_active_torrent(t: dict) -> bool:
+    """True when a torrent is actively downloading/seeding (occupies a slot)."""
+    if int(t.get("status") or 0) == STOPPED:
+        return False
+    return float(t.get("percentDone") or 0) < 1.0
+
+
+def active_count(torrents: list[dict]) -> int:
+    return sum(1 for t in torrents if is_active_torrent(t))
+
+
+def is_complete_torrent(t: dict) -> bool:
+    """True when a torrent has finished downloading (seeding or 100%)."""
+    return int(t.get("status") or 0) == SEED or float(t.get("percentDone") or 0) >= 1.0
+
+
+def plan_slots(active: int, limit: int, count: int) -> list[bool]:
+    """Paused flags for `count` new torrents given `active` currently in flight.
+
+    Returns True where the torrent should be added stopped (queued) because no
+    slot is free. Deterministic and side-effect free so it can be unit tested.
+    """
+    limit = max(1, limit)
+    return [active + i >= limit for i in range(max(0, count))]
+
 
 class ConcurrencyGate:
     def __init__(self, max_concurrent: int):

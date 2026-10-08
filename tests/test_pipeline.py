@@ -159,6 +159,47 @@ def test_enqueue_respects_passed_scope(tmp_path, monkeypatch):
     db.close()
 
 
+def test_enqueue_queues_beyond_concurrency_limit(tmp_path, monkeypatch):
+    """With max_concurrent_downloads=1 and no active torrents, the 2nd+ are queued."""
+    cfg = make_cfg(tmp_path, max_concurrent_downloads=1)
+    db = DB(tmp_path / "arr.db")
+
+    added: list[dict] = []
+
+    class Rpc:
+        def __init__(self, *a, **k):
+            pass
+
+        async def list_torrents(self):
+            return []
+
+        async def add_magnet(self, magnet, download_dir, paused=False):
+            added.append({"magnet": magnet, "paused": paused})
+            return {}
+
+        async def start(self, torrent_id):
+            return {}
+
+    monkeypatch.setattr(pipeline, "_rpc", lambda c: Rpc())
+
+    async def fake_fan_out(q, c):
+        return [fake_release(q.episode)]
+
+    monkeypatch.setattr(pipeline, "_fan_out", fake_fan_out)
+    n = asyncio.run(
+        pipeline._enqueue_episodes(
+            make_series(), pipeline.resolve_scope(make_series()), cfg, db
+        )
+    )
+    assert n == 2
+    # first starts, second is queued (paused)
+    assert added[0]["paused"] is False
+    assert added[1]["paused"] is True
+    assert db.get_download(fake_release(1).infohash)["state"] == "added"
+    assert db.get_download(fake_release(2).infohash)["state"] == "queued"
+    db.close()
+
+
 def test_import_movie_record(tmp_path, monkeypatch):
     cfg = make_cfg(tmp_path)
     db = DB(tmp_path / "arr.db")
