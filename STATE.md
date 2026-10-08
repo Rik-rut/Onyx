@@ -2,7 +2,7 @@
 
 Status: IN_PROGRESS
 
-Iteration: 7
+Iteration: 8
 
 Current Objective:
 Scaffold complete; proceed to release parsing/ranking and core domain wiring.
@@ -30,16 +30,16 @@ Completed:
 - Added R13 launchers: `run.bat` (checks `uv`, prints install hint + `pause` on failure, `uv sync`, `uv run arr` / `--help` when no args, prints exit code + `pause` on non-zero) and `run.sh` mirror. Added README.md (install/run/config/command reference/scope rules/monitoring/layout/seeding/subtitles), LEGAL.md, GOTCHAS.md. R9 robustness greps: no pip/poetry/conda/venv references outside historical notes; indexer base URLs only in `config/settings.py` defaults (Nyaa namespace URI is an identifier, not a request target); OpenSubtitlesClient base now overridable via `base_url`.
 
 Current Work:
-R13 launchers + docs + robustness pass done. Remaining: end-to-end smoke tests via run.bat (blocked on transmission-daemon install), download pipeline live verification, and final DoD checklist.
+Installed transmission-daemon/transmission-remote via scoop (4.0.6); `uv run pytest -m integration` now passes (Daemon start/stop, RPC reachable). Live `arr search movie "Inception"` exercised the offline/deprecation path correctly: TMDB 401 → free-text fallback warning, yts DNS failure isolated with a per-adapter warning, exit path "No results." (code 3). Real indexer/TMDB/OpenSubtitles network calls are blocked on this machine (DNS fails), so the live download/import/monitor smoke tests cannot run here.
 
 Last Test Result:
 PASSED
 
 Current Problem:
-transmission-daemon/transmission-remote not installed on this machine — R2 runtime integration tests and the R13 end-to-end smoke tests will hit exit-code-4 dependency-unavailable handling until Transmission is installed.
+Live end-to-end smoke tests (download movie/tv via real indexers, series add + daemon tick) cannot run on this machine: no TMDB/OpenSubtitles API keys configured and outbound DNS to indexers fails. Unit/integration coverage and the offline degradation paths are verified; the live DoD smoke items remain blocked on network + keys.
 
 Next Action:
-Best-effort smoke of `run.bat` paths that don't need a daemon (`run.bat version`, `run.bat --help`, `run.bat config path`), verify exit codes, and try installing `transmission-daemon` so the R2 integration test and end-to-end smoke can run. Then walk the Definition of Done.
+Walk the Definition of Done and mark what is verified vs blocked (live smoke tests blocked on API keys + outbound network to the configured indexers). If keys/network become available, run `run.bat download movie "Inception" --auto`, the whole-series TV smoke, and `series add` + `daemon` tick re-run idempotency check.
 
 Last Updated:
-2026-10-08T01:18:55.934241+00:00
+2026-10-08T01:20:48.827167+00:00
