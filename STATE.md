@@ -1,8 +1,8 @@
 # Autonomous Agent State
 
-Status: IN_PROGRESS
+Status: BLOCKED
 
-Iteration: 8
+Iteration: 9
 
 Current Objective:
 Scaffold complete; proceed to release parsing/ranking and core domain wiring.
@@ -30,16 +30,16 @@ Completed:
 - Added R13 launchers: `run.bat` (checks `uv`, prints install hint + `pause` on failure, `uv sync`, `uv run arr` / `--help` when no args, prints exit code + `pause` on non-zero) and `run.sh` mirror. Added README.md (install/run/config/command reference/scope rules/monitoring/layout/seeding/subtitles), LEGAL.md, GOTCHAS.md. R9 robustness greps: no pip/poetry/conda/venv references outside historical notes; indexer base URLs only in `config/settings.py` defaults (Nyaa namespace URI is an identifier, not a request target); OpenSubtitlesClient base now overridable via `base_url`.
 
 Current Work:
-Installed transmission-daemon/transmission-remote via scoop (4.0.6); `uv run pytest -m integration` now passes (Daemon start/stop, RPC reachable). Live `arr search movie "Inception"` exercised the offline/deprecation path correctly: TMDB 401 → free-text fallback warning, yts DNS failure isolated with a per-adapter warning, exit path "No results." (code 3). Real indexer/TMDB/OpenSubtitles network calls are blocked on this machine (DNS fails), so the live download/import/monitor smoke tests cannot run here.
+DoD walk complete. Verified: R1–R13 implemented, `uv run pytest` 50 passed/1 deselected, integration daemon test passes, ruff + mypy clean, `run.bat version`/`config path`/`--help` smoke OK, offline degradation path verified (TMDB 401 → free-text fallback, yts DNS failure isolated, exit 3). Support dropped py311-only constraint: `requires-python = ">=3.10"` with `tomli` marker for <3.11 (uv.lock regenerated).
 
 Last Test Result:
 PASSED
 
 Current Problem:
-Live end-to-end smoke tests (download movie/tv via real indexers, series add + daemon tick) cannot run on this machine: no TMDB/OpenSubtitles API keys configured and outbound DNS to indexers fails. Unit/integration coverage and the offline degradation paths are verified; the live DoD smoke items remain blocked on network + keys.
+Live end-to-end smoke tests (download movie/tv via real indexers, series add + daemon tick enqueue) cannot run on this machine: no TMDB/OpenSubtitles API keys configured and outbound DNS to indexers fails. These four DoD checkboxes remain unchecked by design. Additionally, the daemon tick's `enqueue` hook is currently a counting stub (does not add real magnets) pending a reachable indexer; whole-series enqueue respecting `max_concurrent_downloads` is wired in `pipeline.download_tv` only for a single chosen release.
 
 Next Action:
-Walk the Definition of Done and mark what is verified vs blocked (live smoke tests blocked on API keys + outbound network to the configured indexers). If keys/network become available, run `run.bat download movie "Inception" --auto`, the whole-series TV smoke, and `series add` + `daemon` tick re-run idempotency check.
+If API keys + outbound network become available: configure `tmdb_api_key`, run `run.bat download movie "Inception" --auto`, `run.bat download tv "Breaking Bad"` (whole series), `run.bat series add <show>` then two `daemon` ticks to confirm no duplicate enqueue, and check the four live-smoke DoD boxes. Otherwise the codebase is feature-complete and fully tested offline.
 
 Last Updated:
-2026-10-08T01:20:48.827167+00:00
+2026-10-08T01:22:17.092657+00:00

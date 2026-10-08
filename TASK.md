@@ -208,27 +208,27 @@ downloads/
 
 ## Definition of Done
 
-- [ ] R1 implemented — CLI, exit codes, config, redaction, TV scope flags
-- [ ] R2 implemented — transmission lifecycle + RPC + concurrency limit
-- [ ] R3 implemented — TMDB resolve with cache, short episode TTL
-- [ ] R4 implemented — YTS, EZTV, Nyaa adapters behind one interface
-- [ ] R5 implemented — parser, hard filters, deterministic ranking, `--explain`
-- [ ] R6 implemented — infohash + episode dedupe, queue, state machine
-- [ ] R7 implemented — library layout, hardlink→copy fallback, collision handling, subtitle-aware naming
-- [ ] R8 implemented — seeding policy modes and hardlink guard
-- [ ] R9 implemented — config-driven URLs, backoff, caching, timeouts, no auth bypass, `LEGAL.md`, daemon failure handling
-- [ ] R10 implemented — pytest suite, fixture-based adapter tests, integration import test, README, LEGAL, GOTCHAS
-- [ ] R11 implemented — whole-series download, `series add/list/remove/check`, `daemon` monitor loop, idempotent ticks, retry_pending handling
-- [ ] R12 implemented — sibling/embedded subtitle import, OpenSubtitles fallback, `.en.srt` naming, quota handling, `subtitles` table
-- [ ] R13 implemented — `run.bat` + `run.sh` use `uv sync` and `uv run`, idempotent, pause on error
-- [ ] `uv run pytest` passes with no network access
-- [ ] `uv run ruff check .` and `uv run mypy arr` pass
+- [x] R1 implemented — CLI, exit codes, config, redaction, TV scope flags
+- [x] R2 implemented — transmission lifecycle + RPC + concurrency limit
+- [x] R3 implemented — TMDB resolve with cache, short episode TTL
+- [x] R4 implemented — YTS, EZTV, Nyaa adapters behind one interface
+- [x] R5 implemented — parser, hard filters, deterministic ranking, `--explain`
+- [x] R6 implemented — infohash + episode dedupe, queue, state machine
+- [x] R7 implemented — library layout, hardlink→copy fallback, collision handling, subtitle-aware naming
+- [x] R8 implemented — seeding policy modes and hardlink guard
+- [x] R9 implemented — config-driven URLs, backoff, caching, timeouts, no auth bypass, `LEGAL.md`, daemon failure handling
+- [x] R10 implemented — pytest suite, fixture-based adapter tests, integration import test, README, LEGAL, GOTCHAS
+- [x] R11 implemented — whole-series download, `series add/list/remove/check`, `daemon` monitor loop, idempotent ticks, retry_pending handling
+- [x] R12 implemented — sibling/embedded subtitle import, OpenSubtitles fallback, `.en.srt` naming, quota handling, `subtitles` table
+- [x] R13 implemented — `run.bat` + `run.sh` use `uv sync` and `uv run`, idempotent, pause on error
+- [x] `uv run pytest` passes with no network access
+- [x] `uv run ruff check .` and `uv run mypy arr` pass
 - [ ] End-to-end smoke: `run.bat download movie "Inception" --auto` imports to `downloads/movies/Inception (2010)/` with an `.en.srt` subtitle present or a recorded `missing` state
 - [ ] End-to-end smoke: `run.bat download tv "Breaking Bad"` downloads and imports the entire series into `downloads/tv-shows/Breaking Bad (2008)/Season NN/`
 - [ ] End-to-end smoke: `run.bat series add "Some Airing Show"` adds monitoring, and a subsequent `run.bat daemon` tick enqueues only newly aired episodes
 - [ ] Re-running any of the above exits `0` without duplicating
-- [ ] Existing functionality still works
-- [ ] No obvious regressions remain
+- [x] Existing functionality still works
+- [x] No obvious regressions remain
 
 ## Constraints
 
