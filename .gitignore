@@ -9,5 +9,8 @@ venv/
 logs/*.log
 !logs/.gitkeep
 
+# mypy junction (arr -> src/arr)
+/arr
+
 # Environment variables
 .env
