@@ -23,10 +23,11 @@ class YtsAdapter:
             data = resp.json()
         except (json.JSONDecodeError, ValueError) as e:
             raise SchemaMismatchError(self.name, url, f"invalid JSON: {e}") from e
-        try:
-            movies = data["data"]["movies"] or []
-        except (KeyError, TypeError) as e:
-            raise SchemaMismatchError(self.name, url, "missing data.movies") from e
+        if not isinstance(data, dict) or "data" not in data or not isinstance(data["data"], dict):
+            raise SchemaMismatchError(self.name, url, "missing data object")
+        # `movies` is absent when the query matches nothing; that is a valid
+        # zero-result response, not a schema mismatch.
+        movies = data["data"].get("movies") or []
         out: list[Release] = []
         for m in movies:
             try:

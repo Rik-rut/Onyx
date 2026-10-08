@@ -67,6 +67,24 @@ def test_yts_schema_mismatch():
             )
 
 
+def test_yts_empty_results_is_not_schema_mismatch():
+    """A successful query with no matches omits `movies`; must return [] not raise."""
+    payload = {
+        "status": "ok",
+        "data": {"movie_count": 0, "limit": 20, "page_number": 1},
+    }
+    with respx.mock:
+        respx.get("https://yts.mx/api/v2/list_movies.json").mock(
+            return_value=httpx.Response(200, json=payload)
+        )
+        out = asyncio.run(
+            YtsAdapter("https://yts.mx", http()).search(
+                Query(media_type=MediaType.MOVIE, text="nothing")
+            )
+        )
+    assert out == []
+
+
 def test_eztv_search():
     payload = {
         "torrents": [

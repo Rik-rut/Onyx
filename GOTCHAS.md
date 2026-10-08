@@ -3,7 +3,11 @@
 - **EZTV domain churn** — the base URL is config-driven (`eztv_base_url`). A schema-mismatch error
   names the adapter and URL so you know to rotate it.
 - **YTS stability** — responses are cached on disk; a schema change raises
-  `SchemaMismatchError` naming `yts` + the URL.
+  `SchemaMismatchError` naming `yts` + the URL. A successful query with no matches omits the
+  `movies` key; that is treated as zero results, not a schema error.
+- **YTS base-URL migration** — YTS announced a move to `https://movies-api.accel.li/api/v2/`
+  (sunset 2026-04-10). The default `yts_base_url` is `https://yts.lt`; rotate it in config when the
+  old host stops serving. No code change is required since the base URL is config-driven.
 - **Nyaa rate limits / Cloudflare** — per-indexer min interval (`nyaa`: 2s), backoff with jitter on
   429/503, configurable User-Agent, on-disk TTL cache. `arr` does **not** solve challenges.
 - **Nyaa RSS gaps** — seeders/leechers/size/infoHash are parsed from the `nyaa:` namespace; missing
