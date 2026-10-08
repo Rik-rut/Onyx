@@ -7,6 +7,8 @@ PLAN -> IMPLEMENT -> TEST -> DEBUG -> REVIEW -> VERIFY -> COMPLETE
 
 import argparse
 import datetime
+import difflib
+import json
 import os
 import re
 import shutil
@@ -93,6 +95,8 @@ Choose a materially different approach where appropriate.
 
 Make concrete changes and verify them.
 """
+
+ORCHESTRATOR_SYSTEM_PROMPT = """You are the independent engineering orchestrator/reviewer. Review every iteration against the task requirements, scope, changed code, and verification evidence. Do not edit code. Return ONLY a JSON object with exactly these fields: verdict (one of on_track, needs_correction, complete), summary (concise evidence-based reason), instructions (the next focused action; for complete use an empty string). Choose complete only when every task requirement is demonstrably satisfied and verification passes. Choose needs_correction for scope drift, incorrect/incomplete work, failed verification, or unsupported completion claims. Otherwise choose on_track and direct the next focused increment. Never treat STATE.md claims alone as proof; inspect the diff and test evidence."""
 
 DEFAULT_TASK_TEMPLATE = """# Autonomous Task
 
@@ -214,6 +218,37 @@ def sanitize_secrets(text: str) -> str:
     return sanitized
 
 
+def read_orchestrator_env(repo_root: Path) -> Dict[str, str]:
+    """Read orchestrator model settings with process-env precedence over .env."""
+    env_file = repo_root / ".env"
+    file_values: Dict[str, str] = {}
+    if env_file.is_file():
+        try:
+            for line in env_file.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                value = value.strip()
+                if (value.startswith('"') and value.endswith('"')) or (
+                    value.startswith("'") and value.endswith("'")
+                ):
+                    value = value[1:-1]
+                if key.strip() in ("ORCHESTRATOR_MODEL", "ORCHESTRATOR_VARIANT"):
+                    file_values[key.strip()] = value
+        except OSError as error:
+            print(f"[WARN] Failed to read orchestrator settings from .env: {error}", file=sys.stderr)
+    values = {
+        "ORCHESTRATOR_MODEL": os.environ.get(
+            "ORCHESTRATOR_MODEL", file_values.get("ORCHESTRATOR_MODEL", "")
+        ),
+        "ORCHESTRATOR_VARIANT": os.environ.get(
+            "ORCHESTRATOR_VARIANT", file_values.get("ORCHESTRATOR_VARIANT", "")
+        ),
+    }
+    return values
+
+
 @dataclass
 class ControllerConfig:
     repo_root: Path
@@ -223,6 +258,8 @@ class ControllerConfig:
     test_timeout_seconds: int = DEFAULT_TEST_TIMEOUT_SECONDS
     opencode_model: Optional[str] = None
     opencode_variant: Optional[str] = None
+    orchestrator_model: Optional[str] = None
+    orchestrator_variant: Optional[str] = None
     test_command: Optional[str] = None
     use_persistent_server: bool = False
     server_url: Optional[str] = None
@@ -254,12 +291,32 @@ class ControllerConfig:
             or DEFAULT_TEST_TIMEOUT_SECONDS
         )
 
-        model = args.model or os.environ.get("OPENCODE_MODEL") or None
-        variant = args.variant or os.environ.get("OPENCODE_VARIANT") or None
-        test_cmd = args.test_cmd or os.environ.get("TEST_COMMAND") or None
+        model = getattr(args, "model", None) or os.environ.get("OPENCODE_MODEL") or None
+        variant = getattr(args, "variant", None) or os.environ.get("OPENCODE_VARIANT") or None
+        if model is not None and not str(model).strip():
+            model = None
+        if variant is not None and not str(variant).strip():
+            variant = None
+        test_cmd = getattr(args, "test_cmd", None) or os.environ.get("TEST_COMMAND") or None
+
+        orchestrator_env = read_orchestrator_env(repo_root)
+        orchestrator_model = (
+            getattr(args, "orchestrator_model", None)
+            or orchestrator_env.get("ORCHESTRATOR_MODEL")
+            or None
+        )
+        orchestrator_variant = (
+            getattr(args, "orchestrator_variant", None)
+            or orchestrator_env.get("ORCHESTRATOR_VARIANT")
+            or None
+        )
+        if orchestrator_model is not None and not str(orchestrator_model).strip():
+            orchestrator_model = None
+        if orchestrator_variant is not None and not str(orchestrator_variant).strip():
+            orchestrator_variant = None
 
         use_server = False
-        if args.persistent_server:
+        if getattr(args, "persistent_server", False):
             use_server = True
         elif os.environ.get("USE_PERSISTENT_SERVER", "").lower() in ("true", "1", "yes"):
             use_server = True
@@ -276,6 +333,8 @@ class ControllerConfig:
             test_timeout_seconds=test_timeout,
             opencode_model=model,
             opencode_variant=variant,
+            orchestrator_model=orchestrator_model,
+            orchestrator_variant=orchestrator_variant,
             test_command=test_cmd,
             use_persistent_server=use_server,
             server_url=server_url,
@@ -284,6 +343,15 @@ class ControllerConfig:
             status_only=args.status,
             resume=args.resume,
         )
+
+    @property
+    def orchestrator_enabled(self) -> bool:
+        return bool(self.orchestrator_model and str(self.orchestrator_model).strip())
+
+    @property
+    def reviewer_enabled(self) -> bool:
+        # Alias kept for parity with smol-style orchestration (reviewer == orchestrator).
+        return self.orchestrator_enabled
 
 
 class StateFile:
@@ -398,6 +466,52 @@ Last Updated:
 {timestamp}
 """
         self.path.write_text(content, encoding="utf-8")
+
+
+@dataclass
+class ReviewerDecision:
+    verdict: str
+    summary: str
+    instructions: str
+
+    VALID_VERDICTS = {"on_track", "needs_correction", "complete"}
+
+    def approves_completion(self, test_code: int) -> bool:
+        return self.verdict == "complete" and test_code == 0
+
+    def gated_status(self, agent_status: str, test_code: int) -> str:
+        if agent_status == "BLOCKED":
+            return "BLOCKED"
+        if self.approves_completion(test_code):
+            return "COMPLETE"
+        if self.verdict == "needs_correction" or agent_status == "COMPLETE":
+            return "IN_PROGRESS"
+        return agent_status
+
+    def next_instruction(self) -> str:
+        if self.verdict == "needs_correction":
+            return (
+                "Independent reviewer findings — address these before continuing:\n"
+                f"Summary: {self.summary}\n"
+                f"Required correction: {self.instructions}"
+            )
+        if self.verdict == "on_track":
+            return (
+                "Independent reviewer confirms the work is on track. Continue with the "
+                f"next focused requirement. Reviewer note: {self.summary}\n"
+                f"Next direction: {self.instructions}"
+            )
+        return "The reviewer approved the implementation and verification. Do not make further changes."
+
+
+class ReviewerError(RuntimeError):
+    """Raised when the configured orchestrator cannot return a valid review."""
+
+
+# Alias: orchestrator and reviewer are the same role in this template.
+# The orchestrator is a second OpenCode invocation with a different model —
+# no separate API call or credentials are required.
+OrchestratorError = ReviewerError
 
 
 class GitManager:
@@ -737,6 +851,37 @@ class OpenCodeRunner:
                 pass
             self.server_process = None
 
+    def build_command_for_model(
+        self,
+        prompt: str,
+        model: Optional[str] = None,
+        variant: Optional[str] = None,
+        is_first: bool = True,
+        server_url: Optional[str] = None,
+    ) -> List[str]:
+        """Build an `opencode run` command for an explicit model/variant.
+
+        The worker uses ``opencode_model``/``opencode_variant`` while the
+        orchestrator passes its own ``orchestrator_model``/``orchestrator_variant`` —
+        the same CLI, just a different model. No separate API call is required.
+        """
+        assert self.executable is not None, "OpenCode executable is missing"
+        cmd = [self.executable, "run"]
+        if server_url:
+            cmd.extend(["--attach", server_url])
+        elif not is_first:
+            cmd.append("-c")
+        effective_model = model if model is not None else self.config.opencode_model
+        effective_variant = variant if variant is not None else self.config.opencode_variant
+        if effective_model:
+            cmd.extend(["-m", effective_model])
+        if effective_variant:
+            cmd.extend(["--variant", effective_variant])
+        if self.config.auto_approve:
+            cmd.append("--auto")
+        cmd.append(prompt)
+        return cmd
+
     def execute_iteration(self, prompt: str, is_first: bool) -> Tuple[int, str, str, List[str], float]:
         """Run one non-interactive iteration of OpenCode with prompt.
 
@@ -745,23 +890,13 @@ class OpenCodeRunner:
         assert self.executable is not None, "OpenCode executable is missing"
         server_url = self.ensure_server()
 
-        cmd = [self.executable, "run"]
-
-        if server_url:
-            cmd.extend(["--attach", server_url])
-        else:
-            # Continue previous session across iterations if available
-            if not is_first:
-                cmd.append("-c")
-
-        if self.config.opencode_model:
-            cmd.extend(["-m", self.config.opencode_model])
-        if self.config.opencode_variant:
-            cmd.extend(["--variant", self.config.opencode_variant])
-        if self.config.auto_approve:
-            cmd.append("--auto")
-
-        cmd.append(prompt)
+        cmd = self.build_command_for_model(
+            prompt,
+            model=self.config.opencode_model,
+            variant=self.config.opencode_variant,
+            is_first=is_first,
+            server_url=server_url,
+        )
 
         start_time = time.time()
         try:
@@ -789,6 +924,234 @@ class OpenCodeRunner:
             return 1, "", f"Execution failed: {e}", cmd, duration
 
 
+class ReviewerClient:
+    """Model-switch orchestrator/reviewer.
+
+    Unlike an external API reviewer, this orchestrator is a second OpenCode
+    invocation with a different model (``ORCHESTRATOR_MODEL``). The worker
+    builds with ``OPENCODE_MODEL``; the orchestrator reviews with
+    ``ORCHESTRATOR_MODEL`` via the same ``opencode run`` CLI.
+    """
+
+    MAX_DIFF_CHARS = 24000
+    MAX_CONTEXT_FILE_CHARS = 10000
+    MAX_RESPONSE_CHARS = 12000
+
+    def __init__(self, config: ControllerConfig, runner: Optional["OpenCodeRunner"] = None):
+        self.config = config
+        # Lazily reuse the worker runner type so tests can inject fakes.
+        # Import is local to avoid ordering issues; OpenCodeRunner is defined above.
+        self._runner_override = runner
+
+    def _get_runner(self) -> "OpenCodeRunner":
+        if self._runner_override is not None:
+            return self._runner_override
+        return OpenCodeRunner(self.config)
+
+    def describe_routing(self) -> str:
+        worker = self.config.opencode_model or "(default)"
+        orchestrator = self.config.orchestrator_model or "(disabled)"
+        variant = self.config.orchestrator_variant or "(default-variant)"
+        return f"worker={worker} orchestrator={orchestrator} variant={variant} via opencode run -m"
+
+    def collect_review_context(
+        self, task: str, plan: str, state: str, test_output: str
+    ) -> str:
+        changed_files: List[str] = []
+        try:
+            result = subprocess.run(
+                ["git", "status", "--porcelain", "--untracked-files=all"],
+                cwd=self.config.repo_root,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            for line in result.stdout.splitlines():
+                relpath = line[3:].strip().strip('"')
+                if relpath and Path(relpath).name.startswith(".env") is False and not relpath.startswith("logs/"):
+                    changed_files.append(relpath)
+        except Exception:
+            changed_files = []
+
+        diff_parts: List[str] = []
+        if changed_files:
+            try:
+                diff = subprocess.run(
+                    ["git", "diff", "HEAD", "--no-ext-diff", "--", *changed_files],
+                    cwd=self.config.repo_root,
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                )
+                diff_parts.append(diff.stdout)
+            except Exception:
+                pass
+            for relpath in changed_files:
+                if Path(relpath).name.startswith(".env") or relpath.startswith("logs/"):
+                    continue
+                candidate = (self.config.repo_root / relpath).resolve()
+                try:
+                    candidate.relative_to(self.config.repo_root.resolve())
+                except ValueError:
+                    continue
+                if candidate.is_file():
+                    try:
+                        content = candidate.read_text(encoding="utf-8", errors="replace")
+                        new_file_diff = "".join(
+                            difflib.unified_diff(
+                                [],
+                                content.splitlines(keepends=True),
+                                fromfile="/dev/null",
+                                tofile=relpath,
+                            )
+                        )
+                        if new_file_diff:
+                            diff_parts.append(new_file_diff)
+                    except OSError:
+                        continue
+
+        diff_text = sanitize_secrets("\n".join(diff_parts))
+        if not changed_files:
+            excluded_dirs = {".git", "node_modules", ".venv", "venv", "__pycache__", "logs", "dist", "build"}
+            candidates = []
+            cutoff = time.time() - 2 * 60 * 60
+            for candidate in self.config.repo_root.rglob("*"):
+                if not candidate.is_file() or any(part in excluded_dirs for part in candidate.parts):
+                    continue
+                if candidate.name.startswith(".env"):
+                    continue
+                if candidate.suffix.lower() not in {".py", ".js", ".ts", ".tsx", ".jsx", ".json", ".md", ".html", ".css", ".go", ".rs", ".java", ".cs", ".yaml", ".yml", ".toml", ".sh", ".ps1"}:
+                    continue
+                try:
+                    modified = candidate.stat().st_mtime
+                    if modified >= cutoff:
+                        candidates.append((modified, candidate))
+                except OSError:
+                    continue
+            for _modified, candidate in sorted(candidates, reverse=True)[:25]:
+                relative = str(candidate.relative_to(self.config.repo_root))
+                changed_files.append(relative)
+                try:
+                    diff_text += f"\n--- {relative} (recent file snapshot) ---\n{candidate.read_text(encoding='utf-8', errors='replace')[:self.MAX_CONTEXT_FILE_CHARS]}"
+                except OSError:
+                    continue
+
+        changed_names = "\n".join(changed_files[:100]) or "No changed files detected."
+        return f"""TASK.md:
+{task[:self.MAX_CONTEXT_FILE_CHARS]}
+
+PLAN.md:
+{plan[:self.MAX_CONTEXT_FILE_CHARS]}
+
+STATE.md:
+{state[:self.MAX_CONTEXT_FILE_CHARS]}
+
+Changed files:
+{changed_names}
+
+Verification result:
+{test_output[:self.MAX_CONTEXT_FILE_CHARS]}
+
+Diff / bounded file view:
+{diff_text[:self.MAX_DIFF_CHARS] or '(No diff available.)'}
+"""
+
+    def build_review_prompt(self, task: str, context: str) -> str:
+        context = sanitize_secrets(context)
+        return (
+            f"{ORCHESTRATOR_SYSTEM_PROMPT}\n\n"
+            f"TASK:\n{task}\n\nITERATION EVIDENCE:\n{context}"
+        )
+
+    def _request_via_opencode(self, prompt: str) -> str:
+        """Run the orchestrator model via the OpenCode CLI and return raw stdout."""
+        if not self.config.orchestrator_model:
+            raise ReviewerError("Orchestrator model is not configured (ORCHESTRATOR_MODEL).")
+        runner = self._get_runner()
+        if getattr(runner, "executable", None) is None and isinstance(runner, OpenCodeRunner):
+            # Resolve executable lazily; fail clearly when opencode is missing.
+            runner.executable = runner._find_opencode()
+            if not runner.executable:
+                raise ReviewerError("OpenCode executable not found in PATH for orchestrator review.")
+        server_url = None
+        try:
+            if isinstance(runner, OpenCodeRunner):
+                server_url = runner.ensure_server()
+        except Exception:
+            server_url = None
+        if isinstance(runner, OpenCodeRunner):
+            cmd = runner.build_command_for_model(
+                prompt,
+                model=self.config.orchestrator_model,
+                variant=self.config.orchestrator_variant,
+                is_first=True,
+                server_url=server_url,
+            )
+        else:
+            # Test fakes expose execute_iteration(prompt, is_first).
+            cmd = ["opencode-orchestrator-stub"]
+        try:
+            if isinstance(runner, OpenCodeRunner):
+                result = subprocess.run(
+                    cmd,
+                    cwd=self.config.repo_root,
+                    capture_output=True,
+                    text=True,
+                    shell=True,
+                    stdin=subprocess.DEVNULL,
+                    timeout=self.config.test_timeout_seconds,
+                )
+                if result.returncode != 0:
+                    raise ReviewerError(
+                        f"Orchestrator model run failed (exit {result.returncode}): "
+                        f"{sanitize_secrets((result.stdout or '') + (result.stderr or ''))[:2000]}"
+                    )
+                return (result.stdout or "").strip()[: self.MAX_RESPONSE_CHARS]
+            # Fallback for injected fakes.
+            code, stdout, _stderr, _cmd, _dur = runner.execute_iteration(prompt, True)
+            if code != 0:
+                raise ReviewerError(f"Orchestrator model run failed (exit {code}).")
+            return (stdout or "").strip()[: self.MAX_RESPONSE_CHARS]
+        except subprocess.TimeoutExpired as error:
+            raise ReviewerError(
+                f"Orchestrator model run timed out after {self.config.test_timeout_seconds}s."
+            ) from error
+        except ReviewerError:
+            raise
+        except Exception as error:
+            raise ReviewerError(f"Orchestrator request failed: {sanitize_secrets(str(error))}") from error
+
+    @staticmethod
+    def _parse_decision_content(content: str) -> ReviewerDecision:
+        text = (content or "").strip()
+        if not text:
+            raise ValueError("Empty orchestrator response.")
+        if "```" in text:
+            text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip(), flags=re.IGNORECASE)
+        data = json.loads(text)
+        verdict = data.get("verdict")
+        summary = data.get("summary")
+        instructions = data.get("instructions", "")
+        if verdict not in ReviewerDecision.VALID_VERDICTS:
+            raise ValueError("Unknown orchestrator verdict.")
+        if not isinstance(summary, str) or not isinstance(instructions, str):
+            raise ValueError("Orchestrator summary and instructions must be strings.")
+        if verdict == "needs_correction" and not instructions.strip():
+            raise ValueError("Orchestrator correction verdict must include instructions.")
+        return ReviewerDecision(verdict, summary[:2000], instructions[:4000])
+
+    def review(self, task: str, context: str) -> ReviewerDecision:
+        prompt = self.build_review_prompt(task, context)
+        errors: List[str] = []
+        for _attempt in range(2):
+            try:
+                content = self._request_via_opencode(prompt)
+                return self._parse_decision_content(content)
+            except (ReviewerError, json.JSONDecodeError, ValueError, AttributeError, TypeError) as error:
+                errors.append(sanitize_secrets(str(error)))
+        raise ReviewerError("Orchestrator failed after one retry: " + "; ".join(errors))
+
+
 class AutonomousController:
     """Main orchestration controller for autonomous OpenCode loops."""
 
@@ -799,6 +1162,9 @@ class AutonomousController:
         self.test_detector = TestDetector(config.repo_root, config.test_command)
         self.stuck_detector = StuckDetector(config.max_stuck_iterations)
         self.runner = OpenCodeRunner(config)
+        self.reviewer = ReviewerClient(config) if config.orchestrator_enabled else None
+        # Alias: orchestrator and reviewer are the same model-switch role.
+        self.orchestrator = self.reviewer
         self.logs_dir = config.repo_root / "logs"
 
     def preflight_setup(self) -> bool:
@@ -831,6 +1197,12 @@ class AutonomousController:
             print("Please ensure OpenCode is installed and added to PATH (e.g. npm install -g opencode-ai).", file=sys.stderr)
             return False
         print(f"[OK] OpenCode detected: {version}")
+        if self.reviewer:
+            print(f"[OK] Orchestrator enabled (model={self.config.orchestrator_model}).")
+            print(f"[OK] Routing: {self.reviewer.describe_routing()}")
+        else:
+            print("[INFO] Orchestrator is not configured; using single-model workflow only.")
+            print("[INFO] Set ORCHESTRATOR_MODEL (and optionally ORCHESTRATOR_VARIANT) to enable review.")
 
         # Detect tests
         test_cmd = self.test_detector.detect_command()
@@ -859,6 +1231,23 @@ class AutonomousController:
         print(self.git.status_short() or "Clean working directory.")
         print("=" * 60)
 
+    def build_iteration_prompt(
+        self,
+        stuck: bool,
+        test_failed: bool,
+        test_output: str,
+        reviewer_instruction: str,
+    ) -> str:
+        if stuck:
+            prompt = PROMPT_STUCK_RECOVERY
+        elif test_failed:
+            prompt = PROMPT_FAILURE_RECOVERY.format(test_output=test_output)
+        else:
+            prompt = PROMPT_AUTONOMOUS_ITERATION
+        if reviewer_instruction:
+            prompt += "\n\nORCHESTRATOR DIRECTION FOR THIS ITERATION:\n" + reviewer_instruction
+        return prompt
+
     def write_iteration_log(
         self,
         iteration: int,
@@ -875,10 +1264,21 @@ class AutonomousController:
         test_output: str,
         git_after: str,
         state_after: str,
+        reviewer_decision: Optional[ReviewerDecision] = None,
     ) -> Path:
         """Write structured log file for the iteration."""
         log_path = self.logs_dir / f"iteration-{iteration:03d}.log"
         cmd_str = " ".join(f'"{c}"' if " " in c else c for c in cmd_list)
+        if reviewer_decision:
+            reviewer_section = (
+                f"Verdict: {reviewer_decision.verdict}\n"
+                f"Summary: {reviewer_decision.summary}\n"
+                f"Instructions: {reviewer_decision.instructions or '(None)'}"
+            )
+        elif self.reviewer:
+            reviewer_section = "Reviewer: enabled but no decision recorded."
+        else:
+            reviewer_section = "Reviewer: disabled (single-model mode)."
 
         content = f"""================================================================================
 AUTONOMOUS AGENT ITERATION LOG
@@ -887,6 +1287,7 @@ Iteration:             {iteration:03d}
 Timestamp:             {timestamp}
 Status Before:         {status_before}
 Duration:              {duration:.2f}s
+Reviewer:               {reviewer_section}
 
 GIT STATUS BEFORE:
 {git_before or 'Clean.'}
@@ -953,6 +1354,7 @@ STATE.MD AFTER:
         last_test_failed = False
         last_test_output = ""
         stuck_in_recovery = False
+        reviewer_instruction = ""
 
         print("=" * 60)
         print("STARTING AUTONOMOUS OPENCODE LOOP")
@@ -991,15 +1393,18 @@ STATE.MD AFTER:
 
                 print(f"\n>>> ITERATION {iteration:03d}/{self.config.max_iterations} (Elapsed: {int(elapsed)}s)")
 
-                # Select Prompt
+                # Select Prompt (worker + orchestrator direction + recovery states)
+                prompt = self.build_iteration_prompt(
+                    stuck=stuck_in_recovery,
+                    test_failed=last_test_failed,
+                    test_output=last_test_output,
+                    reviewer_instruction=reviewer_instruction,
+                )
                 if stuck_in_recovery:
-                    prompt = PROMPT_STUCK_RECOVERY
                     print("[INFO] Sending STUCK RECOVERY prompt to OpenCode...")
                 elif last_test_failed:
-                    prompt = PROMPT_FAILURE_RECOVERY.format(test_output=last_test_output)
                     print("[INFO] Sending FAILURE RECOVERY prompt to OpenCode...")
                 else:
-                    prompt = PROMPT_AUTONOMOUS_ITERATION
                     print("[INFO] Sending STANDARD AUTONOMOUS prompt to OpenCode...")
 
                 # Update State to IN_PROGRESS or VERIFYING
@@ -1045,6 +1450,85 @@ STATE.MD AFTER:
                     last_test=test_summary,
                 )
 
+                reviewer_decision: Optional[ReviewerDecision] = None
+                active_reviewer = getattr(self, "reviewer", None) or getattr(self, "orchestrator", None)
+                if active_reviewer:
+                    task_text = (self.config.repo_root / "TASK.md").read_text(encoding="utf-8", errors="replace")
+                    plan_path = self.config.repo_root / "PLAN.md"
+                    state_text = self.state_file.read_text()
+                    plan_text = plan_path.read_text(encoding="utf-8", errors="replace") if plan_path.is_file() else ""
+                    evidence = (
+                        f"Controller verification command: {test_cmd or '(none detected)'}\n"
+                        f"Controller verification exit code: {test_code}\n"
+                        f"Controller verification output:\n{test_output or '(No automated suite detected.)'}\n"
+                        f"opencode exit code: {opencode_code}\nopencode stdout:\n{stdout}\nopencode stderr:\n{stderr}"
+                    )
+                    review_context = active_reviewer.collect_review_context(
+                        task_text, plan_text, state_text, evidence
+                    )
+                    try:
+                        reviewer_decision = active_reviewer.review(task_text, review_context)
+                    except ReviewerError as error:
+                        problem = f"Orchestrator review failed after retry: {error}"
+                        print(f"[ERROR] {problem}", file=sys.stderr)
+                        self.state_file.update(
+                            status="BLOCKED",
+                            iteration=iteration,
+                            problem=problem,
+                            next_action="Check ORCHESTRATOR_MODEL/VARIANT and opencode availability; then resume.",
+                            last_test=test_summary,
+                        )
+                        self.write_iteration_log(
+                            iteration=iteration,
+                            timestamp=iter_timestamp,
+                            status_before=status_before,
+                            git_before=git_before,
+                            cmd_list=cmd_list,
+                            opencode_code=opencode_code,
+                            duration=duration,
+                            stdout=stdout,
+                            stderr=stderr,
+                            test_cmd=test_cmd,
+                            test_code=test_code,
+                            test_output=test_output,
+                            git_after=git_after,
+                            state_after=self.state_file.read_text(),
+                        )
+                        return 1
+
+                    print(
+                        f"[REVIEWER] {reviewer_decision.verdict}: "
+                        f"{reviewer_decision.summary}"
+                    )
+                    agent_status = self.state_file.parse().get("status", "IN_PROGRESS")
+                    gated_status = reviewer_decision.gated_status(agent_status, test_code)
+                    if reviewer_decision.verdict == "needs_correction":
+                        gated_status = "IN_PROGRESS"
+                    self.state_file.update(
+                        status=gated_status,
+                        iteration=iteration,
+                        problem=(
+                            reviewer_decision.summary
+                            if reviewer_decision.verdict == "needs_correction"
+                            else ""
+                        ),
+                        next_action=(
+                            reviewer_decision.instructions
+                            if reviewer_decision.instructions
+                            else ("All requirements reviewed and verified." if gated_status == "COMPLETE" else None)
+                        ),
+                        last_test=test_summary,
+                    )
+                    reviewer_instruction = reviewer_decision.next_instruction()
+                    if reviewer_decision.verdict == "complete" and gated_status == "COMPLETE":
+                        print("[REVIEWER] Task approved complete after passing verification.")
+                    elif reviewer_decision.verdict == "complete" and test_code != 0:
+                        reviewer_instruction = (
+                            "The reviewer found the implementation complete, but the controller's "
+                            "verification failed. Fix the failing checks before claiming completion.\n"
+                            + reviewer_decision.summary
+                        )
+
                 # Stuck Detection
                 is_stuck, stuck_count = self.stuck_detector.record_and_evaluate(
                     git_status_before=git_before,
@@ -1082,6 +1566,7 @@ STATE.MD AFTER:
                             test_output=test_output,
                             git_after=git_after,
                             state_after=self.state_file.read_text(),
+                            reviewer_decision=reviewer_decision,
                         )
                         return 1
                 else:
@@ -1103,6 +1588,7 @@ STATE.MD AFTER:
                     test_output=test_output,
                     git_after=git_after,
                     state_after=self.state_file.read_text(),
+                    reviewer_decision=reviewer_decision,
                 )
                 print(f"[INFO] Log saved to {log_path.name}")
 
@@ -1111,8 +1597,9 @@ STATE.MD AFTER:
                     if self.git.create_checkpoint(iteration, f"milestone tests passing"):
                         print(f"[INFO] Git checkpoint commit created for iteration {iteration:03d}.")
 
-                # Check if Agent declared COMPLETE
-                if current_state_status == "COMPLETE":
+                # Check completion through the orchestrator gate when enabled.
+                final_state_status = self.state_file.parse().get("status", "IN_PROGRESS")
+                if final_state_status == "COMPLETE":
                     if test_code == 0:
                         print("\n" + "=" * 60)
                         print("🎉 TASK COMPLETE! All verification checks passed.")
@@ -1123,8 +1610,8 @@ STATE.MD AFTER:
                         self.state_file.update(status="VERIFYING")
 
                 # Check if Agent declared BLOCKED
-                if current_state_status == "BLOCKED":
-                    print(f"\n[STOP] Agent requested human intervention (BLOCKED): {state_after_data.get('problem')}")
+                if final_state_status == "BLOCKED":
+                    print(f"\n[STOP] Agent requested human intervention (BLOCKED): {self.state_file.parse().get('problem')}")
                     return 1
 
             print(f"\n[STOP] Reached maximum iterations ({self.config.max_iterations}). Stopping safely.")
@@ -1142,8 +1629,10 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--max-iterations", type=int, help=f"Max autonomous iterations (default: {DEFAULT_MAX_ITERATIONS})")
     parser.add_argument("--max-runtime", type=int, help=f"Max runtime in seconds (default: {DEFAULT_MAX_RUNTIME_SECONDS})")
     parser.add_argument("--test-cmd", type=str, help="Override automated test command")
-    parser.add_argument("--model", type=str, help="Override OpenCode model (provider/model)")
-    parser.add_argument("--variant", type=str, help="Override OpenCode model variant (e.g. high, max)")
+    parser.add_argument("--model", type=str, help="Override OpenCode worker model (provider/model)")
+    parser.add_argument("--variant", type=str, help="Override OpenCode worker model variant (e.g. high, max)")
+    parser.add_argument("--orchestrator-model", type=str, default=None, help="Orchestrator model for review (same OpenCode CLI, different model)")
+    parser.add_argument("--orchestrator-variant", type=str, default=None, help="Orchestrator model variant (e.g. high, max)")
     parser.add_argument("--persistent-server", action="store_true", help="Use or start persistent OpenCode server")
     return parser.parse_args()
 
