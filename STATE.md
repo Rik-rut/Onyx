@@ -2,17 +2,19 @@
 
 Status: IN_PROGRESS
 
-Iteration: 21
+Iteration: 22
 
 Current Objective:
-Complete R11 `series check` (force an immediate check) and R9 daemon lifecycle error handling (stale lock, port-in-use).
+Complete R8 seeding-policy coverage: evaluate the policy on `queue` (not only the daemon tick) and support `time` mode via `secondsSeeding`.
 
 Completed:
-- (Iterations 17-21) No-API-key migration; real orchestration (whole-series/season/episode enqueue, import, daemon); EZTV title-relevance gate; `max_concurrent_downloads` enforcement; season-pack preference; `unmonitor_ended_series`.
-- (Iteration 22)
-  - `series_check` now performs a real immediate check: resolves the show, selects due episodes, and enqueues them via `_enqueue_episodes` (previously it only printed a count). Maps TVMaze failure to exit 4 and missing series to exit 3.
-  - R9 daemon lifecycle: added `port_in_use`, `lock_file_paths`, `find_stale_lock`, and wired `Daemon.start` to raise `PortInUseError` when the RPC port is occupied and `StaleLockError` when the daemon exits immediately with a stale lock present (previously these error types were defined but never raised).
-  - Added `tests/test_concurrency.py` cases for port detection and stale-lock discovery (plus the existing planner/status tests).
+- (Iterations 17-22) No-API-key migration; real orchestration; EZTV title gate; `max_concurrent_downloads`; season-pack preference; `unmonitor_ended_series`; `series_check` force-check; daemon stale-lock/port-in-use errors.
+- (Iteration 23)
+  - `seeding.py`: added `evaluate_torrent(torrent, mode, ...)` which extracts `uploadRatio` and `secondsSeeding` (hours) from a Transmission torrent dict so `time` mode actually works (previously `hours_seeded` was never passed, so time mode could never fire).
+  - `transmission/process.py`: `list_torrents` now also requests `secondsSeeding` and `doneDate`.
+  - `pipeline._apply_seeding_policy` uses `evaluate_torrent` and passes `seed_time_hours`.
+  - `pipeline.list_queue` now runs `_sync_rpc_state` + `_apply_seeding_policy` so R8 policy evaluation happens on `queue`; still returns `[]` and exits 0 when transmission is unreachable.
+  - Added `tests/test_seeding.py` cases for `evaluate_torrent` (ratio, time-from-seconds, manual).
 
 Current Work:
 Executing autonomous iteration.
@@ -27,4 +29,4 @@ Next Action:
 Human runs the E2E download smokes against a running transmission-daemon, then marks DoD 233-236 and sets Status: COMPLETE.
 
 Last Updated:
-2026-10-08T14:54:05.537114+00:00
+2026-10-08T14:55:40.094783+00:00

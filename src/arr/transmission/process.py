@@ -187,6 +187,7 @@ class RpcClient:
         fields = [
             "id", "hashString", "name", "status", "percentDone", "rateDownload",
             "rateUpload", "uploadRatio", "eta", "errorString", "downloadDir",
+            "secondsSeeding", "doneDate",
         ]
         args = await self._request("torrent-get", {"fields": fields})
         return args.get("torrents", [])

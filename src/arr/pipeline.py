@@ -794,8 +794,13 @@ async def series_check(series_id, cfg):
 
 def list_queue(cfg):
     db = _db(cfg)
-    rows = db.list_downloads()
-    db.close()
+    try:
+        # R8: policy evaluation runs on `queue` as well as the daemon tick.
+        _sync_rpc_state(cfg, db)
+        _apply_seeding_policy(cfg, db)
+        rows = db.list_downloads()
+    finally:
+        db.close()
     return rows
 
 
@@ -924,7 +929,7 @@ def run_daemon(cfg):
 def _apply_seeding_policy(cfg: Config, db: DB) -> None:
     """Evaluate seeding policy for completed downloads (best effort)."""
     from arr.core.models import SeedingPolicyMode
-    from arr.seeding import should_remove, validate_seeding
+    from arr.seeding import evaluate_torrent, validate_seeding
 
     try:
         mode = SeedingPolicyMode(str(cfg.get("seeding_policy", "ratio")))
@@ -951,11 +956,11 @@ def _apply_seeding_policy(cfg: Config, db: DB) -> None:
             t = by_hash.get(str(rec["infohash"]).lower())
             if not t:
                 continue
-            ratio = t.get("uploadRatio")
-            if should_remove(
+            if evaluate_torrent(
+                t,
                 mode,
-                ratio=float(ratio) if ratio is not None else None,
                 seed_ratio=float(cfg.get("seed_ratio", 1.0)),
+                seed_time_hours=float(cfg.get("seed_time_hours", 24.0)),
                 imported=True,
                 import_mode=_import_mode(cfg),
             ):

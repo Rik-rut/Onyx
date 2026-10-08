@@ -43,3 +43,30 @@ HARDLINK_NOTICE = (
     "only backing copy, so seeding can continue. Removing the torrent will not affect the library, "
     "but the data will be lost when the incomplete dir is cleaned."
 )
+
+
+def evaluate_torrent(
+    torrent: dict,
+    mode: SeedingPolicyMode | str,
+    *,
+    seed_ratio: float = 1.0,
+    seed_time_hours: float = 24.0,
+    imported: bool = False,
+    import_mode: str = "hardlink",
+) -> bool:
+    """Decide from a Transmission torrent dict whether its data should be removed.
+
+    Extracts ratio/secondsSeeding so callers don't duplicate the field logic.
+    Deterministic and side-effect free.
+    """
+    ratio = torrent.get("uploadRatio")
+    seconds = torrent.get("secondsSeeding")
+    return should_remove(
+        mode,
+        ratio=float(ratio) if ratio is not None else None,
+        seed_ratio=seed_ratio,
+        hours_seeded=float(seconds) / 3600.0 if seconds is not None else None,
+        seed_time_hours=seed_time_hours,
+        imported=imported,
+        import_mode=import_mode,
+    )
