@@ -6,7 +6,8 @@ no content, and no seedbox functionality. It does not host, distribute, or trans
 - You are responsible for complying with the laws and terms of service of the indexers, usenet/torrent
   providers, and any content you download in your jurisdiction.
 - `arr` does not solve captchas, bypass Cloudflare, or authenticate to private trackers. It only reads
-  public endpoints (and the official OpenSubtitles API with your own key).
+  public endpoints. `curl_cffi` browser impersonation is used solely to avoid TLS-fingerprint blocks on
+  IMDb, Subscene, and YIFY Subtitles — never to solve interactive challenges.
 - There is no telemetry, analytics, or phone-home. All network access is to endpoints you configure.
 - The maintainers provide this software as-is and make no warranty that any download is legal in your
   jurisdiction.

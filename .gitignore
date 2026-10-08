@@ -12,5 +12,9 @@ logs/*.log
 # mypy junction (arr -> src/arr)
 /arr
 
+# Runtime DB / HTTP caches
+.cache/
+downloads/
+
 # Environment variables
 .env

@@ -12,8 +12,8 @@ def validate_seeding(mode: SeedingPolicyMode | str, import_mode: str) -> None:
     if m == SeedingPolicyMode.REMOVE_ON_IMPORT.value and import_mode == "hardlink":
         raise SeedingConfigError(
             "seeding_policy=remove_on_import is incompatible with import_mode=hardlink: "
-            "removing the torrent data after a hardlink import would delete the library's only copy. "
-            "Use import_mode=copy/move, or choose ratio/time/manual."
+            "removing the torrent data after a hardlink import would delete the library's "
+            "only copy. Use import_mode=copy/move, or choose ratio/time/manual."
         )
 
 

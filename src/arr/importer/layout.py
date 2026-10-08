@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import errno
 import hashlib
 import os
 import shutil
@@ -122,7 +121,10 @@ def import_subtitles(root: Path, media_dst: Path, *, lang: str = "en") -> list[P
         langs = {"en", "eng", "english"}
         if lang == "en" and not any(t in langs for t in tokens):
             # keep only English-ish or untagged subs; skip other languages
-            other = {"es", "spa", "fr", "fre", "de", "ger", "it", "pt", "por", "ja", "jp", "kr", "ko", "zh", "chs", "cht", "ru"}
+            other = {
+                "es", "spa", "fr", "fre", "de", "ger", "it", "pt", "por",
+                "ja", "jp", "kr", "ko", "zh", "chs", "cht", "ru",
+            }
             if any(t in other for t in tokens):
                 continue
         target_dir = media_dst.parent
@@ -137,7 +139,15 @@ def import_subtitles(root: Path, media_dst: Path, *, lang: str = "en") -> list[P
     return out
 
 
-def import_movie(content: Path, library_root: Path, title: str, year: int | None, *, mode: str = "hardlink", overwrite: bool = False) -> Path | None:
+def import_movie(
+    content: Path,
+    library_root: Path,
+    title: str,
+    year: int | None,
+    *,
+    mode: str = "hardlink",
+    overwrite: bool = False,
+) -> Path | None:
     files = media_files(content) if content.is_dir() else [content]
     if not files:
         return None
@@ -163,7 +173,10 @@ def import_episode(
     if not files:
         return None
     primary = max(files, key=lambda p: p.stat().st_size)
-    dst = episode_dest(library_root, series.title, series.year, season, episode, episode_title, primary.suffix.lower())
+    dst = episode_dest(
+        library_root, series.title, series.year, season, episode, episode_title,
+        primary.suffix.lower(),
+    )
     final = import_file(primary, dst, mode=mode, overwrite=overwrite)
     import_subtitles(content if content.is_dir() else content.parent, final)
     return final

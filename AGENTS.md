@@ -22,6 +22,26 @@ Inspect the repository before making assumptions. Base decisions on actual code,
 
 ---
 
+## Graphify Integration
+
+This project uses [graphify](https://github.com/HKUDS/Graphify) for knowledge graph construction and reasoning. Before making non-trivial changes:
+
+1. **Build/update the knowledge graph** after significant code changes:
+   ```bash
+   uv run graphify build --source src/ --output .graphify/graph.json
+   ```
+
+2. **Query the graph** to understand code relationships before refactoring:
+   ```bash
+   uv run graphify query --graph .graphify/graph.json --query "What calls TmdbClient?"
+   ```
+
+3. **Use graph context** when planning refactors — the graph reveals call chains, dependency clusters, and impact radius that raw grep misses.
+
+4. **Update the graph after each iteration** so it stays current with the codebase.
+
+---
+
 ## Autonomous Operating Loop
 
 Execute work through this continuous cycle:

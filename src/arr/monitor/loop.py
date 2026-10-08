@@ -3,11 +3,13 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import date, datetime, timedelta
 
-from arr.core.models import Episode, MonitoredSeries, Series
+from arr.core.models import Episode, Series
 from arr.db import DB
 
 
-def episode_airs_within_lookahead(ep: Episode, today: date | None = None, lookahead_days: int = 7) -> bool:
+def episode_airs_within_lookahead(
+    ep: Episode, today: date | None = None, lookahead_days: int = 7
+) -> bool:
     if not ep.air_date:
         return False
     try:
@@ -25,7 +27,7 @@ def select_airing(
     today: date | None = None,
     lookahead_days: int = 7,
 ) -> list[Episode]:
-    """Episodes whose air_date is today/past or within lookahead, not already imported/downloading."""
+    """Episodes whose air_date is today/past or within lookahead, not already downloaded."""
     out: list[Episode] = []
     for ep in series.all_episodes():
         if not episode_airs_within_lookahead(ep, today, lookahead_days):
@@ -47,7 +49,10 @@ def tick(
     lookahead_days: int | None = None,
 ) -> list[int]:
     """Run one monitor tick. Returns tmdb_ids that had episodes enqueued."""
-    lookahead = lookahead_days if lookahead_days is not None else int(cfg.get("monitor_lookahead_days", 7))
+    if lookahead_days is not None:
+        lookahead = lookahead_days
+    else:
+        lookahead = int(cfg.get("monitor_lookahead_days", 7))
     enqueued_for: list[int] = []
     for m in db.list_monitored():
         try:
@@ -68,7 +73,9 @@ def tick(
 
             print(f"warning: enqueue failed for {m['title']}: {e}", file=sys.stderr)
             for ep in wanted:
-                db.set_episode_state(series.tmdb_id, ep.season_number, ep.episode_number, "retry_pending")
+                db.set_episode_state(
+                    series.tmdb_id, ep.season_number, ep.episode_number, "retry_pending"
+                )
             continue
         if n:
             enqueued_for.append(int(m["tmdb_id"]))

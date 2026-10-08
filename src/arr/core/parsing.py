@@ -91,7 +91,11 @@ def parse_release(title: str) -> dict[str, Any]:
         "is_pack": (
             isinstance(g.get("season"), list)
             or bool(g.get("episode_list"))
-            or (g.get("type") in ("episode", "episode_list") and g.get("season") is not None and g.get("episode") is None)
+            or (
+                g.get("type") in ("episode", "episode_list")
+                and g.get("season") is not None
+                and g.get("episode") is None
+            )
             or ("complete" in str(g.get("other") or "").lower())
         ),
         "is_proper": bool(g.get("proper")),
@@ -153,12 +157,18 @@ def hard_filter(r: Release, q: Query, profile: QualityProfile, cfg: dict) -> str
 
 
 def score_release(r: Release, q: Query, profile: QualityProfile) -> dict[str, Any]:
-    res_rank = profile.resolutions.index(r.resolution) if r.resolution in profile.resolutions else len(profile.resolutions)
+    if r.resolution in profile.resolutions:
+        res_rank = profile.resolutions.index(r.resolution)
+    else:
+        res_rank = len(profile.resolutions)
     src_order = profile.source_order
     src_rank = src_order.index(r.source) if r.source in src_order else len(src_order)
     codec_map = {"HEVC": "x265", "AVC": "x264"}
     codec_key = codec_map.get(r.codec or "", r.codec or "")
-    codec_rank = profile.codecs.index(codec_key) if codec_key in profile.codecs else len(profile.codecs)
+    if codec_key in profile.codecs:
+        codec_rank = profile.codecs.index(codec_key)
+    else:
+        codec_rank = len(profile.codecs)
     return {
         "seeders": r.seeds,
         "resolution_rank": res_rank,

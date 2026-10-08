@@ -1,6 +1,6 @@
 @echo off
 REM arr launcher - bootstraps via uv and forwards all args.
-setlocal
+setlocal EnableDelayedExpansion
 
 where uv >nul 2>nul
 if errorlevel 1 (
@@ -16,9 +16,10 @@ if errorlevel 1 (
 )
 uv sync
 if errorlevel 1 (
-    echo uv sync failed with exit code %errorlevel%.
+    set "sync_rc=%errorlevel%"
+    echo uv sync failed with exit code !sync_rc!.
     pause
-    exit /b %errorlevel%
+    exit /b !sync_rc!
 )
 if "%~1"=="" (
     uv run arr --help

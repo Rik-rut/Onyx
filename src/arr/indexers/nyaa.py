@@ -21,7 +21,10 @@ class NyaaAdapter:
     async def search(self, q: Query) -> list[Release]:
         url = f"{self.base_url}/"
         resp = await self.http.get(
-            url, key="nyaa", ttl_seconds=1800, params={"page": "rss", "q": q.text, "c": "1_2", "f": "0"}
+            url,
+            key="nyaa",
+            ttl_seconds=1800,
+            params={"page": "rss", "q": q.text, "c": "1_2", "f": "0"},
         )
         try:
             root = ET.fromstring(resp.content)
@@ -74,7 +77,17 @@ def _parse_size(v) -> int:
     except ValueError:
         return 0
     unit = parts[1].lower()
-    mult = {"b": 1, "kib": 1 << 10, "kb": 1 << 10, "mib": 1 << 20, "mb": 1 << 20, "gib": 1 << 30, "gb": 1 << 30, "tib": 1 << 40, "tb": 1 << 40}
+    mult = {
+        "b": 1,
+        "kib": 1 << 10,
+        "kb": 1 << 10,
+        "mib": 1 << 20,
+        "mb": 1 << 20,
+        "gib": 1 << 30,
+        "gb": 1 << 30,
+        "tib": 1 << 40,
+        "tb": 1 << 40,
+    }
     return int(value * mult.get(unit, 0))
 
 

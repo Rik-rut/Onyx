@@ -33,4 +33,6 @@ class PortInUseError(TransmissionError):
 class StaleLockError(TransmissionError):
     def __init__(self, msg: str = "Stale transmission-daemon lock file detected"):
         super().__init__(msg)
-        self.hint = "Delete the stale `transmission-daemon` lock file (in the config dir) and retry."
+        self.hint = (
+            "Delete the stale `transmission-daemon` lock file (in the config dir) and retry."
+        )

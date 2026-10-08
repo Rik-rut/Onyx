@@ -83,7 +83,7 @@ def test_eztv_search():
         ]
     }
     with respx.mock:
-        respx.get("https://eztv.re/api/get_torrents").mock(
+        respx.get("https://eztv.re/api/get-torrents").mock(
             return_value=httpx.Response(200, json=payload)
         )
         out = asyncio.run(

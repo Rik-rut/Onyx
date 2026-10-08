@@ -17,7 +17,7 @@ class EztvAdapter:
         return media_type == MediaType.TV
 
     async def search(self, q: Query) -> list[Release]:
-        url = f"{self.base_url}/api/get_torrents"
+        url = f"{self.base_url}/api/get-torrents"
         params: dict[str, object] = {"limit": q.limit}
         if q.imdb_id:
             params["imdb_id"] = q.imdb_id.lstrip("tt")

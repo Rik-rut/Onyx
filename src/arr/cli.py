@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 from typing import Any
 
 import typer
@@ -48,20 +49,21 @@ def main(
     ctx: typer.Context,
     config: str | None = typer.Option(None, "--config", help="Path to config.toml"),
 ) -> None:
-    ctx.obj = {"config_path": config}
+    ctx.obj = {"config_path": Path(config) if config else None}
 
 
 @search_app.command("movie")
 def search_movie(
     ctx: typer.Context,
     query: str,
+    explain: bool = typer.Option(False, "--explain", help="Print filter/score details to stderr"),
     json_out: bool = typer.Option(False, "--json"),
 ) -> None:
     from arr.pipeline import search
 
     cfg = _config(ctx)
     try:
-        results = asyncio.run(search(MediaType.MOVIE, query, cfg))
+        results = asyncio.run(search(MediaType.MOVIE, query, cfg, explain_mode=explain))
     except Exception as e:
         log.error("%s", e)
         raise typer.Exit(ExitCode.RUNTIME_ERROR)
@@ -77,13 +79,16 @@ def search_tv(
     query: str,
     season: int | None = typer.Option(None, "-s"),
     episode: int | None = typer.Option(None, "-e"),
+    explain: bool = typer.Option(False, "--explain", help="Print filter/score details to stderr"),
     json_out: bool = typer.Option(False, "--json"),
 ) -> None:
     from arr.pipeline import search
 
     cfg = _config(ctx)
     try:
-        results = asyncio.run(search(MediaType.TV, query, cfg, season=season, episode=episode))
+        results = asyncio.run(
+            search(MediaType.TV, query, cfg, season=season, episode=episode, explain_mode=explain)
+        )
     except Exception as e:
         log.error("%s", e)
         raise typer.Exit(ExitCode.RUNTIME_ERROR)
@@ -206,7 +211,9 @@ def queue(ctx: typer.Context, json_out: bool = typer.Option(False, "--json")) ->
 
 
 @app.command("status")
-def status(ctx: typer.Context, download_id: str, json_out: bool = typer.Option(False, "--json")) -> None:
+def status(
+    ctx: typer.Context, download_id: str, json_out: bool = typer.Option(False, "--json")
+) -> None:
     from arr.pipeline import get_status
 
     cfg = _config(ctx)
@@ -230,7 +237,11 @@ def cancel(
 
 
 @app.command("import")
-def import_cmd(ctx: typer.Context, download_id: str, overwrite: bool = typer.Option(False, "--overwrite")) -> None:
+def import_cmd(
+    ctx: typer.Context,
+    download_id: str,
+    overwrite: bool = typer.Option(False, "--overwrite"),
+) -> None:
     from arr.pipeline import import_download
 
     cfg = _config(ctx)

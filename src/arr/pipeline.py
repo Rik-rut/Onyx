@@ -5,18 +5,20 @@ import sys
 import time
 from pathlib import Path
 
-from arr.config.settings import Config, default_config_path
-from arr.core.models import MediaType, QualityProfile, Query, Release, Series
+from arr.config.settings import Config
+from arr.core.models import MediaType, QualityProfile, Query, Release
 from arr.core.parsing import explain, rank
 from arr.db import DB
-from arr.importer.layout import import_episode, import_movie
+from arr.importer.layout import import_movie
 from arr.indexers import build_adapters
-from arr.metadata.tmdb import TmdbClient, TmdbError, degrade
+from arr.metadata.imdb import ImdbClient, ImdbError
+from arr.metadata.imdb import degrade as degrade_movie
+from arr.metadata.tvmaze import TvmazeClient, TvmazeError
+from arr.metadata.tvmaze import degrade as degrade_tv
 from arr.monitor.loop import select_airing, tick
-from arr.series.orchestration import mark_pack_imported, needed_episodes, resolve_scope
 from arr.subtitles.service import ensure_subtitles
 from arr.transmission.errors import DependencyUnavailable
-from arr.transmission.process import ConcurrencyGate, RpcClient, find_daemon, find_remote
+from arr.transmission.process import RpcClient
 
 DB_PATH = Path(".cache") / "arr" / "arr.db"
 
@@ -60,27 +62,29 @@ async def search(
     explain_mode: bool = False,
 ) -> list[Release]:
     q = Query(media_type=media_type, text=query, season=season, episode=episode)
-    # TMDB resolve (best effort)
+    # Metadata resolve (best effort)
     try:
-        tmdb = TmdbClient(cfg)
         if media_type == MediaType.MOVIE:
-            m = tmdb.search_movie(query)
+            imdb = ImdbClient(cfg)
+            m = imdb.search_movie(query)
             if m:
-                q.tmdb_id = m.get("id")
+                q.imdb_id = m.get("imdb_id") or m.get("id")
                 q.title = m.get("title")
+                q.year = m.get("year")
         else:
-            s = tmdb.search_tv(query)
+            tvm = TvmazeClient(cfg)
+            s = tvm.search_tv(query)
             if s:
                 q.tmdb_id = s.get("id")
                 q.title = s.get("name")
-                try:
-                    ext = tmdb.tv_external_ids(s["id"])
-                    q.imdb_id = ext.get("imdb_id")
-                except TmdbError:
-                    pass
-    except TmdbError as e:
-        degrade(query)
-        print(f"warning: TMDB lookup failed: {e}", file=sys.stderr)
+                ext = s.get("externals") or {}
+                q.imdb_id = ext.get("imdb")
+    except (TvmazeError, ImdbError) as e:
+        if media_type == MediaType.MOVIE:
+            degrade_movie(query)
+        else:
+            degrade_tv(query)
+        print(f"warning: metadata lookup failed: {e}", file=sys.stderr)
 
     adapters = [a for a in build_adapters(cfg) if a.supports(media_type)]
     search_text = q.title or query
@@ -124,7 +128,9 @@ def _pick(results: list[Release], auto: bool, pick: int | None) -> Release | Non
     return results[idx] if 0 <= idx < len(results) else None
 
 
-async def download_movie(query, cfg, *, pick=None, auto=False, yes=False, no_wait=False, force=False):
+async def download_movie(
+    query, cfg, *, pick=None, auto=False, yes=False, no_wait=False, force=False
+):
     releases = await search(MediaType.MOVIE, query, cfg)
     if not releases:
         print("No results.", file=sys.stderr)
@@ -177,20 +183,45 @@ async def download_movie(query, cfg, *, pick=None, auto=False, yes=False, no_wai
     rec = db.get_download(chosen.infohash)
     content = Path(str((rec or {}).get("content_path") or incomple))
     if content.exists():
-        final = import_movie(content, Path(str(cfg.get("library_root", "downloads"))), chosen.title, chosen.year, mode=str(cfg.get("import_mode", "hardlink")))
+        final = import_movie(
+            content,
+            Path(str(cfg.get("library_root", "downloads"))),
+            chosen.title,
+            chosen.year,
+            mode=str(cfg.get("import_mode", "hardlink")),
+        )
         if final:
             db.set_download_state(chosen.infohash, "imported", destination_path=str(final))
-            ensure_subtitles(final, cfg=cfg, db=db, tmdb_id=chosen.tmdb_id, release_name=chosen.title)
+            ensure_subtitles(
+                final, cfg=cfg, db=db, tmdb_id=chosen.tmdb_id, release_name=chosen.title
+            )
             print(f"Imported to {final}")
     db.close()
 
 
-async def download_tv(query, cfg, *, season=None, episode=None, pack=False, pick=None, auto=False, yes=False, no_wait=False, force=False):
+async def download_tv(
+    query,
+    cfg,
+    *,
+    season=None,
+    episode=None,
+    pack=False,
+    pick=None,
+    auto=False,
+    yes=False,
+    no_wait=False,
+    force=False,
+):
     releases = await search(MediaType.TV, query, cfg, season=season, episode=episode)
     if not releases:
         print("No results.", file=sys.stderr)
         raise SystemExit(3)
-    scope = "entire series" if season is None and episode is None else (f"S{season}" if episode is None else f"S{season}E{episode}")
+    if season is None and episode is None:
+        scope = "entire series"
+    elif episode is None:
+        scope = f"S{season}"
+    else:
+        scope = f"S{season}E{episode}"
     print(f"Scope: {scope} ({len(releases)} candidate releases)")
     if not yes:
         if input("Start download? [y/N] ").strip().lower() not in ("y", "yes"):
@@ -208,21 +239,30 @@ async def download_tv(query, cfg, *, season=None, episode=None, pack=False, pick
         await rpc.add_magnet(chosen.magnet, str(incomple))
     except DependencyUnavailable:
         raise SystemExit(4)
-    db.add_download(chosen.infohash, media_type="tv", title=chosen.title, season=season, episode=episode, indexer=chosen.indexer, download_dir=str(incomple), state="added")
+    db.add_download(
+        chosen.infohash,
+        media_type="tv",
+        title=chosen.title,
+        season=season,
+        episode=episode,
+        indexer=chosen.indexer,
+        download_dir=str(incomple),
+        state="added",
+    )
     print(f"Added: {chosen.title}")
     db.close()
 
 
 async def series_add(query, cfg):
     try:
-        tmdb = TmdbClient(cfg)
-        s = tmdb.search_tv(query)
+        tvm = TvmazeClient(cfg)
+        s = tvm.search_tv(query)
         if not s:
             print("No series found.", file=sys.stderr)
             raise SystemExit(3)
-        series = tmdb.full_series(s["id"])
-    except TmdbError as e:
-        print(f"TMDB error: {e}", file=sys.stderr)
+        series = tvm.full_series(s["id"])
+    except TvmazeError as e:
+        print(f"TVMaze error: {e}", file=sys.stderr)
         raise SystemExit(4)
     db = _db(cfg)
     sid = db.add_monitored(series.tmdb_id, series.title, series.imdb_id, series.status, None)
@@ -237,7 +277,15 @@ def series_list(cfg):
     for r in rows:
         eps = db.episodes_for_series(int(r["tmdb_id"]))
         imported = sum(1 for e in eps if e["state"] == "imported")
-        out.append({"id": r["id"], "title": r["title"], "status": r["status"], "last_checked_at": r["last_checked_at"], "imported_episodes": imported})
+        out.append(
+            {
+                "id": r["id"],
+                "title": r["title"],
+                "status": r["status"],
+                "last_checked_at": r["last_checked_at"],
+                "imported_episodes": imported,
+            }
+        )
     db.close()
     return out
 
@@ -255,8 +303,8 @@ async def series_check(series_id, cfg):
     if not rows:
         print("No such series.", file=sys.stderr)
         raise SystemExit(3)
-    tmdb = TmdbClient(cfg)
-    series = tmdb.full_series(int(rows[0]["tmdb_id"]))
+    tvm = TvmazeClient(cfg)
+    series = tvm.full_series(int(rows[0]["tmdb_id"]))
     wanted = select_airing(series, db, lookahead_days=int(cfg.get("monitor_lookahead_days", 7)))
     print(f"{len(wanted)} episode(s) due for {series.title}")
     db.close()
@@ -305,7 +353,13 @@ async def run_daemon(cfg):
     for _ in itertools.count():
         db = _db(cfg)
         try:
-            tick(db, cfg, series_fetcher=lambda tid: TmdbClient(cfg).full_series(tid), enqueue=lambda s, eps: len(eps))
+            tvm = TvmazeClient(cfg)
+            tick(
+                db,
+                cfg,
+                series_fetcher=lambda tid: tvm.full_series(tid),
+                enqueue=lambda s, eps: len(eps),
+            )
         finally:
             db.close()
         await asyncio.sleep(int(cfg.get("monitor_poll_interval_minutes", 30)) * 60)

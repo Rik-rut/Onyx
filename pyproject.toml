@@ -11,6 +11,8 @@ dependencies = [
     "guessit>=3.8",
     "rich>=13.7",
     "tomli; python_version<'3.11'",
+    "curl-cffi>=0.16.3",
+    "selectolax>=1.0.0",
 ]
 
 [project.scripts]
@@ -41,7 +43,7 @@ addopts = "-m 'not integration'"
 target-version = "py311"
 src = ["src"]
 line-length = 100
-extend-exclude = ["agent", "logs", ".venv", "arr"]
+extend-exclude = ["agent", "logs", ".venv", "/arr"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "W"]

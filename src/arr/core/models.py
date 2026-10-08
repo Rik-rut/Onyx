@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from enum import Enum, StrEnum
+from enum import StrEnum
 from typing import Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field
@@ -32,7 +32,8 @@ class DownloadState(StrEnum):
 class SubtitleSource(StrEnum):
     EMBEDDED = "embedded"
     SIBLING = "sibling"
-    OPENSUBTITLES = "opensubtitles"
+    SUBSCENE = "subscene"
+    YIFY = "yify"
     MISSING = "missing"
 
 

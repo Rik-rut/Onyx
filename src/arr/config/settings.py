@@ -12,12 +12,9 @@ except ModuleNotFoundError:  # Python 3.10
     import tomli as tomllib  # type: ignore[no-redef]
 
 
-SECRET_KEYS = ("tmdb_api_key", "opensubtitles_api_key", "transmission_rpc_pass")
+SECRET_KEYS = ("transmission_rpc_pass",)
 
 DEFAULTS: dict = {
-    "tmdb_api_key": "",
-    "tmdb_base_url": "https://api.themoviedb.org/3",
-    "opensubtitles_api_key": "",
     "download_root": "downloads",
     "library_root": "downloads",
     "transmission_rpc_host": "127.0.0.1",
@@ -26,9 +23,14 @@ DEFAULTS: dict = {
     "transmission_rpc_pass": "",
     "transmission_download_dir": "downloads",
     "transmission_remote": "",
-    "yts_base_url": "https://yts.mx",
+    "yts_base_url": "https://yts.lt",
     "eztv_base_url": "https://eztv.re",
     "nyaa_base_url": "https://nyaa.si",
+    "tvmaze_base_url": "https://api.tvmaze.com",
+    "imdb_base_url": "https://www.imdb.com",
+    "imdb_suggestion_base_url": "https://v3.sg.media-imdb.com/suggestion",
+    "subscene_base_url": "https://subscene.com",
+    "yify_subtitles_base_url": "https://yifysubtitles.ch",
     "quality_profile": "default",
     "seeding_policy": "ratio",
     "seed_ratio": 1.0,
@@ -58,8 +60,11 @@ CONFIG_TEMPLATE = """\
 # arr configuration
 # Secrets are never logged or printed unless --show-secrets is passed.
 
-tmdb_api_key = ""
-opensubtitles_api_key = ""
+# Metadata / subtitle source base URLs (free or scraped; no API keys)
+tvmaze_base_url = "https://api.tvmaze.com"
+imdb_base_url = "https://www.imdb.com"
+subscene_base_url = "https://subscene.com"
+yify_subtitles_base_url = "https://yifysubtitles.ch"
 
 download_root = "downloads"
 library_root = "downloads"
@@ -73,7 +78,7 @@ transmission_download_dir = "downloads"
 transmission_remote = ""
 
 # Indexer base URLs (config-driven; rotate as needed)
-yts_base_url = "https://yts.mx"
+yts_base_url = "https://yts.lt"
 eztv_base_url = "https://eztv.re"
 nyaa_base_url = "https://nyaa.si"
 
@@ -128,8 +133,8 @@ def default_config_path() -> Path:
     return Path.home() / ".config" / "arr" / "config.toml"
 
 
-def load_config(path: Path | None = None) -> Config:
-    p = path or default_config_path()
+def load_config(path: Path | str | None = None) -> Config:
+    p = Path(path) if path is not None else default_config_path()
     values = dict(DEFAULTS)
     if p.exists():
         with p.open("rb") as f:
@@ -138,8 +143,8 @@ def load_config(path: Path | None = None) -> Config:
     return Config(values=values)
 
 
-def init_config(path: Path | None = None) -> Path:
-    p = path or default_config_path()
+def init_config(path: Path | str | None = None) -> Path:
+    p = Path(path) if path is not None else default_config_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     if not p.exists():
         p.write_text(CONFIG_TEMPLATE, encoding="utf-8")

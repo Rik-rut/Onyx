@@ -34,10 +34,14 @@ class YtsAdapter:
                     h = t.get("hash")
                     if not h:
                         continue
+                    title = (
+                        f"{m.get('title', '')} {m.get('year', '')} "
+                        f"{t.get('quality', '')} {t.get('type', '')}"
+                    ).strip()
                     out.append(
                         Release(
                             indexer=self.name,
-                            title=f"{m.get('title', '')} {m.get('year', '')} {t.get('quality', '')} {t.get('type', '')}".strip(),
+                            title=title,
                             infohash=str(h).lower(),
                             magnet=f"magnet:?xt=urn:btih:{h}",
                             media_type=MediaType.MOVIE,

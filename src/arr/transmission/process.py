@@ -11,7 +11,6 @@ from pathlib import Path
 from arr.transmission.errors import (
     AuthError,
     DependencyUnavailable,
-    PortInUseError,
     RpcError,
     TransmissionError,
 )
@@ -143,16 +142,19 @@ class RpcClient:
         return await self._request("torrent-add", args)
 
     async def list_torrents(self) -> list[dict]:
-        args = await self._request(
-            "torrent-get",
-            {"fields": ["id", "hashString", "name", "status", "percentDone", "rateDownload", "rateUpload", "uploadRatio", "eta", "errorString", "downloadDir"]},
-        )
+        fields = [
+            "id", "hashString", "name", "status", "percentDone", "rateDownload",
+            "rateUpload", "uploadRatio", "eta", "errorString", "downloadDir",
+        ]
+        args = await self._request("torrent-get", {"fields": fields})
         return args.get("torrents", [])
 
     async def get(self, torrent_id: int | str) -> dict | None:
         torrents = await self.list_torrents()
         for t in torrents:
-            if str(t.get("id")) == str(torrent_id) or t.get("hashString", "").startswith(str(torrent_id)):
+            if str(t.get("id")) == str(torrent_id) or t.get("hashString", "").startswith(
+                str(torrent_id)
+            ):
                 return t
         return None
 
@@ -160,7 +162,9 @@ class RpcClient:
         t = await self.get(torrent_id)
         if t is None:
             raise RpcError(f"Torrent {torrent_id} not found")
-        return await self._request("torrent-remove", {"ids": [t["id"]], "delete-local-data": delete_data})
+        return await self._request(
+            "torrent-remove", {"ids": [t["id"]], "delete-local-data": delete_data}
+        )
 
     async def start(self, torrent_id: int | str) -> dict:
         t = await self.get(torrent_id)

@@ -82,7 +82,9 @@ class DB:
         now = time.time()
         try:
             self._conn.execute(
-                "INSERT INTO downloads (infohash, state, created_at, updated_at, media_type, tmdb_id, title, season, episode, indexer, download_dir) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO downloads (infohash, state, created_at, updated_at, media_type, "
+                "tmdb_id, title, season, episode, indexer, download_dir) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     infohash,
                     fields.get("state", DownloadState.QUEUED.value),
@@ -142,10 +144,20 @@ class DB:
         ).fetchone()
         return row["state"] if row else None
 
-    def set_episode_state(self, tmdb_id: int, season: int, episode: int, state: str, infohash: str | None = None, path: str | None = None) -> None:
+    def set_episode_state(
+        self,
+        tmdb_id: int,
+        season: int,
+        episode: int,
+        state: str,
+        infohash: str | None = None,
+        path: str | None = None,
+    ) -> None:
         self._conn.execute(
-            "INSERT INTO episodes (tmdb_id, season, episode, state, infohash, path) VALUES (?,?,?,?,?,?) "
-            "ON CONFLICT(tmdb_id, season, episode) DO UPDATE SET state=excluded.state, infohash=excluded.infohash, path=excluded.path",
+            "INSERT INTO episodes (tmdb_id, season, episode, state, infohash, path) "
+            "VALUES (?,?,?,?,?,?) "
+            "ON CONFLICT(tmdb_id, season, episode) DO UPDATE SET state=excluded.state, "
+            "infohash=excluded.infohash, path=excluded.path",
             (tmdb_id, season, episode, state, infohash, path),
         )
         self._conn.commit()
@@ -157,13 +169,23 @@ class DB:
         return [dict(r) for r in rows]
 
     # monitored_series
-    def add_monitored(self, tmdb_id: int, title: str, imdb_id: str | None, status: str, quality: str | None) -> int:
-        cur = self._conn.execute(
-            "INSERT OR IGNORE INTO monitored_series (tmdb_id, imdb_id, title, status, quality, created_at) VALUES (?,?,?,?,?,?)",
+    def add_monitored(
+        self,
+        tmdb_id: int,
+        title: str,
+        imdb_id: str | None,
+        status: str,
+        quality: str | None,
+    ) -> int:
+        self._conn.execute(
+            "INSERT OR IGNORE INTO monitored_series "
+            "(tmdb_id, imdb_id, title, status, quality, created_at) VALUES (?,?,?,?,?,?)",
             (tmdb_id, imdb_id, title, status, quality, time.time()),
         )
         self._conn.commit()
-        row = self._conn.execute("SELECT id FROM monitored_series WHERE tmdb_id=?", (tmdb_id,)).fetchone()
+        row = self._conn.execute(
+            "SELECT id FROM monitored_series WHERE tmdb_id=?", (tmdb_id,)
+        ).fetchone()
         return int(row["id"])
 
     def list_monitored(self) -> list[dict]:
@@ -175,20 +197,34 @@ class DB:
         self._conn.commit()
 
     def set_last_checked(self, series_id: int, ts: float) -> None:
-        self._conn.execute("UPDATE monitored_series SET last_checked_at=? WHERE id=?", (ts, series_id))
+        self._conn.execute(
+            "UPDATE monitored_series SET last_checked_at=? WHERE id=?", (ts, series_id)
+        )
         self._conn.commit()
 
     # subtitles
-    def add_subtitle(self, media_path: str, language: str, source: str, state: str, subtitle_id: int | None = None) -> None:
+    def add_subtitle(
+        self,
+        media_path: str,
+        language: str,
+        source: str,
+        state: str,
+        subtitle_id: int | None = None,
+    ) -> None:
         self._conn.execute(
-            "INSERT INTO subtitles (media_path, language, source, state, subtitle_id, created_at) VALUES (?,?,?,?,?,?)",
+            "INSERT INTO subtitles (media_path, language, source, state, subtitle_id, "
+            "created_at) VALUES (?,?,?,?,?,?)",
             (media_path, language, source, state, subtitle_id, time.time()),
         )
         self._conn.commit()
 
     def list_subtitles(self, media_path: str | None = None) -> list[dict]:
         if media_path:
-            rows = self._conn.execute("SELECT * FROM subtitles WHERE media_path=?", (media_path,)).fetchall()
+            rows = self._conn.execute(
+                "SELECT * FROM subtitles WHERE media_path=?", (media_path,)
+            ).fetchall()
         else:
-            rows = self._conn.execute("SELECT * FROM subtitles ORDER BY created_at DESC").fetchall()
+            rows = self._conn.execute(
+                "SELECT * FROM subtitles ORDER BY created_at DESC"
+            ).fetchall()
         return [dict(r) for r in rows]

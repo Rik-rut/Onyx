@@ -17,8 +17,14 @@
 - **Sibling subtitles** — renamed to `<basename>.<lang>.<ext>`; `.ass`/`.sub` become `.srt` only when
   `ffmpeg` is present, otherwise copied with their original extension.
 - **Missing subtitles** — the media file still imports; the `subtitles` table records `missing`.
-- **OpenSubtitles quota** — exhaustion records `quota_exceeded` and retries on the next daemon tick;
-  the import itself is not blocked.
+- **IMDb/Subscene/YIFY scraping** — all three are scraped with `curl_cffi` browser impersonation. An
+  HTML-structure change or block raises a source-specific error; metadata degrades to free-text indexer
+  search and subtitles fall through to the next source (Subscene → YIFY → `missing`). The import itself
+  is never blocked by a scrape failure.
+- **Subtitle scrape rate limit / block** — records `error` on the subtitle row and retries on the next
+  daemon tick.
+- **TVMaze rate limit (429)** — exponential backoff with jitter; a stale cache entry is preferred over a
+  hard failure.
 - **Destination collisions** — same size + partial hash → skip; otherwise `.1`/`.2` suffix;
   `--overwrite` replaces.
 - **Hardlink + remove_on_import** — refused: it would delete the library's only copy. Hardlink imports
@@ -32,8 +38,8 @@
 - **Monitor tick re-enqueue** — prevented by episode-level `state` checks; covered by a frozen-clock
   unit test. An indexer down mid-tick marks episodes `retry_pending` and is retried next tick.
 - **Anime absolute numbering** — preserved with a warning; remapping is out of scope for v1.
-- **Secrets** — TMDB/OpenSubtitles keys and RPC password are redacted in logs and `config show`
-  unless `--show-secrets`.
+- **Secrets** — the Transmission RPC password is redacted in logs and `config show` unless
+  `--show-secrets`. No API keys exist (all metadata/subtitle sources are free or scraped).
 - **`run.bat` idempotency** — `uv sync` is a no-op when the lockfile/env are current; no sentinel file.
 - **`uv` missing on a clean machine** — `run.bat` prints the install command and exits non-zero with a
   `pause`.

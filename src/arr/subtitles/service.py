@@ -2,16 +2,14 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 from arr.config.settings import Config
 from arr.db import DB
-from arr.subtitles.opensubtitles import (
-    OpenSubtitlesClient,
-    OpenSubtitlesError,
-    QuotaExceeded,
-    rank_candidates,
-)
+from arr.subtitles.base import SubtitleError, rank_candidates
+from arr.subtitles.subscene import SubsceneClient
+from arr.subtitles.yify import YifySubtitlesClient
 
 
 def ffmpeg_available() -> bool:
@@ -54,7 +52,7 @@ def ensure_subtitles(
     """Ensure <media basename>.<lang>.<ext> exists next to the media file.
 
     Priority: sibling subtitle already next to the file (imported by importer) →
-    OpenSubtitles fallback → record missing. Returns list of db records.
+    Subscene → YIFY fallback → record missing. Returns list of db records.
     """
     results: list[dict] = []
     if not cfg.get("subtitles_enabled", True):
@@ -75,46 +73,63 @@ def ensure_subtitles(
                         cand = converted
                         source = "embedded" if ext in (".ass", ".sub") else "sibling"
                 db.add_subtitle(str(media_path), lang, source, "ok", None)
-                results.append({"language": lang, "path": str(cand), "source": source, "state": "ok"})
+                results.append(
+                    {"language": lang, "path": str(cand), "source": source, "state": "ok"}
+                )
                 break
         else:
-            # 2) OpenSubtitles fallback
-            api = str(cfg.get("opensubtitles_api_key", ""))
-            if not api:
-                db.add_subtitle(str(media_path), lang, "missing", "missing", None)
-                results.append({"language": lang, "path": None, "source": "missing", "state": "missing"})
-                continue
-            try:
-                client = OpenSubtitlesClient(api)
-                cands = client.search(
-                    imdb_id=imdb_id, tmdb_id=tmdb_id, season=season, episode=episode, languages=[lang]
-                )
-                ranked = rank_candidates(cands, release_name=release_name, forced_only=forced)
-                if not ranked:
-                    db.add_subtitle(str(media_path), lang, "missing", "missing", None)
-                    results.append({"language": lang, "path": None, "source": "missing", "state": "missing"})
+            # 2) Subscene → YIFY fallback
+            subscene_base = str(cfg.get("subscene_base_url", "https://subscene.com"))
+            yify_base = str(cfg.get("yify_subtitles_base_url", "https://yifysubtitles.ch"))
+            placed = False
+            for source, client in (
+                ("subscene", SubsceneClient(subscene_base)),
+                ("yify", YifySubtitlesClient(yify_base)),
+            ):
+                try:
+                    cands = client.search(
+                        imdb_id=imdb_id,
+                        tmdb_id=tmdb_id,
+                        title=release_name or None,
+                        season=season,
+                        episode=episode,
+                        languages=[lang],
+                    )
+                    ranked = rank_candidates(cands, release_name=release_name, forced_only=forced)
+                    if not ranked:
+                        continue
+                    top = ranked[0]
+                    data = client.download(top)
+                    dst = media_path.parent / f"{base.name}.{lang}.srt"
+                    dst.write_bytes(data)
+                    db.add_subtitle(str(media_path), lang, source, "ok", top.subtitle_id)
+                    results.append(
+                        {
+                            "language": lang,
+                            "path": str(dst),
+                            "source": source,
+                            "state": "ok",
+                            "subtitle_id": top.subtitle_id,
+                        }
+                    )
+                    placed = True
+                    break
+                except SubtitleError as e:
+                    print(f"warning: {source} subtitle lookup failed: {e}", file=sys.stderr)
+                    db.add_subtitle(str(media_path), lang, source, "error", None)
+                    results.append(
+                        {
+                            "language": lang,
+                            "path": None,
+                            "source": source,
+                            "state": f"error: {e}",
+                        }
+                    )
                     continue
-                top = ranked[0]
-                link = client.download_link(top.file_id)
-                dst = media_path.parent / f"{base.name}.{lang}.srt"
-                _download(link, dst)
-                db.add_subtitle(str(media_path), lang, "opensubtitles", "ok", top.subtitle_id)
+            if not placed:
+                db.add_subtitle(str(media_path), lang, "missing", "missing", None)
                 results.append(
-                    {"language": lang, "path": str(dst), "source": "opensubtitles", "state": "ok", "subtitle_id": top.subtitle_id}
+                    {"language": lang, "path": None, "source": "missing", "state": "missing"}
                 )
-            except QuotaExceeded:
-                db.add_subtitle(str(media_path), lang, "opensubtitles", "quota_exceeded", None)
-                results.append({"language": lang, "path": None, "source": "opensubtitles", "state": "quota_exceeded"})
-            except OpenSubtitlesError as e:
-                db.add_subtitle(str(media_path), lang, "missing", "error", None)
-                results.append({"language": lang, "path": None, "source": "missing", "state": f"error: {e}"})
     return results
 
-
-def _download(url: str, dst: Path) -> None:
-    import httpx
-
-    with httpx.Client(timeout=30.0, follow_redirects=True) as c:
-        r = c.get(url)
-        r.raise_for_status()
-        dst.write_bytes(r.content)

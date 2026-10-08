@@ -4,7 +4,9 @@ from arr.core.models import Episode, Series
 from arr.db import DB
 
 
-def resolve_scope(series: Series, season: int | None = None, episode: int | None = None) -> list[Episode]:
+def resolve_scope(
+    series: Series, season: int | None = None, episode: int | None = None
+) -> list[Episode]:
     eps: list[Episode] = []
     seasons = series.seasons
     if season is not None:
@@ -17,16 +19,28 @@ def resolve_scope(series: Series, season: int | None = None, episode: int | None
     return eps
 
 
-def seasons_in_scope(series: Series, season: int | None = None, episode: int | None = None) -> list[int]:
+def seasons_in_scope(
+    series: Series, season: int | None = None, episode: int | None = None
+) -> list[int]:
     if season is not None:
         return [season]
     if episode is not None:
         # episode-only scope implies all seasons containing that episode number
-        return [s.season_number for s in series.seasons if any(e.episode_number == episode for e in s.episodes)]
+        return [
+            s.season_number
+            for s in series.seasons
+            if any(e.episode_number == episode for e in s.episodes)
+        ]
     return [s.season_number for s in series.seasons]
 
 
-def needed_episodes(series: Series, db: DB, *, season: int | None = None, episode: int | None = None) -> list[Episode]:
+def needed_episodes(
+    series: Series,
+    db: DB,
+    *,
+    season: int | None = None,
+    episode: int | None = None,
+) -> list[Episode]:
     out: list[Episode] = []
     for e in resolve_scope(series, season, episode):
         state = db.episode_state(series.tmdb_id, e.season_number, e.episode_number)

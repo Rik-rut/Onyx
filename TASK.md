@@ -2,11 +2,13 @@
 
 ## Objective
 
-Build a Python CLI-only application that searches public torrent indexers (YTS for movies, EZTV for TV, Nyaa for anime) for movies and TV episodes, resolves titles via TMDB, ranks releases by seeders and quality, hands the chosen magnet to a locally managed `transmission-daemon`, and imports the completed download into a `downloads/movies` and `downloads/tv-shows` library using Sonarr/Radarr-compatible naming.
+Build a Python CLI-only application that searches public torrent indexers (YTS for movies, EZTV for TV, Nyaa for anime) for movies and TV episodes, resolves titles via TVMaze (TV) and IMDb scraping (movies), ranks releases by seeders and quality, hands the chosen magnet to a locally managed `transmission-daemon`, and imports the completed download into a `downloads/movies` and `downloads/tv-shows` library using Sonarr/Radarr-compatible naming.
 
 TV downloads default to **entire series**; single episodes and single seasons are opt-in flags. Monitored shows continue to be checked on a daemon tick and new episodes are downloaded automatically as they air. English subtitles are fetched by default and placed alongside the media file when not already present in the torrent.
 
 No GUI, no TUI in v1. Terminal output only, with an optional `--json` flag for machine-readable output. Ships with a `run.bat` that bootstraps the environment via `uv` and launches the app on Windows.
+
+**No API keys required.** All metadata and subtitle sources are either free REST APIs (TVMaze) or scraped with `curl_cffi` browser-impersonation (IMDb, Subscene, YIFY Subtitles).
 
 ## Requirements
 
@@ -24,10 +26,10 @@ No GUI, no TUI in v1. Terminal output only, with an optional `--json` flag for m
 - `download tv <query>` with no `-s`/`-e` downloads the **entire series** (all seasons, all episodes). `-s N` restricts to one season. `-s N -e M` restricts to one episode. The chosen scope is printed before any download starts and confirmed unless `--yes` is passed.
 - `--auto` selects the top-ranked release without prompting.
 - `--json` emits structured output on every command that returns data.
-- Exit codes: `0` success, `1` runtime error, `2` usage error, `3` no results, `4` dependency unavailable (transmission/TMDB).
+- Exit codes: `0` success, `1` runtime error, `2` usage error, `3` no results, `4` dependency unavailable (transmission/metadata source).
 - Config file at `%APPDATA%\arr\config.toml` on Windows and `$XDG_CONFIG_HOME/arr/config.toml` (default `~/.config/arr/`) on Linux/macOS. Override with `--config`. `config init` writes a documented template.
-- Config keys: `tmdb_api_key`, `opensubtitles_api_key`, `download_root`, `library_root`, `transmission_rpc_host`, `transmission_rpc_port`, `transmission_rpc_user`, `transmission_rpc_pass`, `transmission_download_dir`, indexer base URLs, quality profile, seeding policy, per-indexer rate limits, User-Agent, `subtitle_languages` (default `["en"]`), `subtitles_enabled` (default `true`), `subtitles_forced_only` (default `false`), `max_concurrent_downloads` (default `3`), `prefer_season_packs` (default `true`), `monitor_poll_interval_minutes` (default `30`), `monitor_lookahead_days` (default `7`).
-- Secrets never logged; `config show` redacts `tmdb_api_key`, `opensubtitles_api_key`, and RPC password unless `--show-secrets`.
+- Config keys: `download_root`, `library_root`, `transmission_rpc_host`, `transmission_rpc_port`, `transmission_rpc_user`, `transmission_rpc_pass`, `transmission_download_dir`, indexer base URLs, `tvmaze_base_url`, `imdb_base_url`, `subscene_base_url`, `yify_subtitles_base_url`, quality profile, seeding policy, per-indexer rate limits, User-Agent, `subtitle_languages` (default `["en"]`), `subtitles_enabled` (default `true`), `subtitles_forced_only` (default `false`), `max_concurrent_downloads` (default `3`), `prefer_season_packs` (default `true`), `monitor_poll_interval_minutes` (default `30`), `monitor_lookahead_days` (default `7`).
+- Secrets never logged; `config show` redacts RPC password unless `--show-secrets`.
 - TOML parsing via stdlib `tomllib` on Python 3.11+; `tomli` backport on 3.10.
 
 ### R2 — Torrent engine (do not implement one)
@@ -38,12 +40,15 @@ No GUI, no TUI in v1. Terminal output only, with an optional `--json` flag for m
 - Support `transmission-remote` on `PATH` and a `--transmission-remote <path>` override. On Windows, also probe `%ProgramFiles%\Transmission\`.
 - Enforce `max_concurrent_downloads`: when the limit is reached, queued downloads wait until a slot frees. This is required for whole-series downloads, which enqueue many torrents at once.
 
-### R3 — Metadata resolution
+### R3 — Metadata resolution (no API keys)
 
-- Resolve free-text queries to canonical IDs via TMDB before searching indexers: `title`, `year`, `imdb_id`, `tmdb_id`, `tvdb_id` where available.
-- For TV, resolve `show → seasons → episodes` and carry season and episode numbers through the pipeline. The show object must include `status` (`Returning Series`, `Ended`, `Canceled`, …) and each episode must include `air_date`, `season_number`, `episode_number`, and `name`.
-- Cache TMDB responses on disk with a TTL (default 24h). Episode lists for `Returning Series` use a shorter TTL (default 6h) so monitoring picks up newly announced episodes promptly.
-- If TMDB is unreachable and no cache entry exists, degrade to free-text indexer search and warn on stderr; do not hard-fail.
+- **TV shows**: Resolve free-text queries via **TVMaze** REST API (`https://api.tvmaze.com/search/shows?q=<query>`). No auth required. Returns `id`, `name`, `premiered`, `status`, `externals` (including `imdb`).
+- **Movies**: Resolve free-text queries via **IMDb** HTML scraping using `curl_cffi` with browser impersonation (`impersonate="chrome"`). Parse search results and title pages with `selectolax`.
+- For TV, resolve `show → seasons → episodes` via TVMaze `/shows/<id>/episodes` and carry season and episode numbers through the pipeline. The show object must include `status` (`Returning Series`, `Ended`, `Canceled`, …) and each episode must include `air_date`, `season_number`, `episode_number`, and `name`.
+- Cache TVMaze responses on disk with a TTL (default 24h). Episode lists for `Returning Series` use a shorter TTL (default 6h) so monitoring picks up newly announced episodes promptly.
+- If TVMaze is unreachable and no cache entry exists, degrade to free-text indexer search and warn on stderr; do not hard-fail.
+- If IMDb scraping fails (network error, parsing failure, or block), degrade to free-text indexer search and warn on stderr; do not hard-fail.
+- `tmdb_id` field name is retained in DB/models for compatibility but stores TVMaze show IDs.
 
 ### R4 — Indexer adapters
 
@@ -57,7 +62,7 @@ class Adapter(Protocol):
 ```
 
 - **YTS** (`movie`): `GET /api/v2/list_movies.json?query_term=<q>`, `GET /api/v2/movie_details.json?movie_id=<id>`. Map `torrents[]` (`hash`, `quality`, `type`, `size_bytes`, `seeds`, `peers`) to `Release`. Build the magnet from `hash` plus configured trackers.
-- **EZTV** (`tv`): `GET /api/get_torrents?imdb_id=<tt>&limit=N`. Map `title`, `magnet`, `seeds`, `peers`, `size_bytes`, `season`, `episode`.
+- **EZTV** (`tv`): `GET /api/get-torrents?imdb_id=<tt>&limit=N`. Map `title`, `magnet`, `seeds`, `peers`, `size_bytes`, `season`, `episode`.
 - **Nyaa** (`tv`, anime): `GET /?page=rss&q=<q>&c=1_2&f=0`. Parse the `nyaa:` namespace for `seeders`, `leechers`, `size`, `infoHash`; take the magnet from `<link>`. If a required field is absent from RSS, fall back to the HTML table scrape for that field only.
 - A single `MediaType` + `Query` fans out to every adapter that `supports` the type, concurrently via `asyncio.gather` with a per-adapter timeout. One adapter erroring does not fail the search; partial results are returned with a stderr warning.
 - All base URLs are config-driven with sane defaults; no domain is hardcoded outside the default config template.
@@ -136,8 +141,9 @@ downloads/
 
 - **Domain churn**: every indexer base URL is config-driven. A response that does not match the expected schema produces a distinct error naming the adapter and the URL, not a generic parse failure.
 - **Rate limits / Cloudflare**: per-indexer minimum request interval, exponential backoff with jitter on `429`/`503`, a configurable User-Agent, and an on-disk response cache with TTL for search and metadata calls.
-- **Timeouts**: every outbound HTTP call has an `httpx` timeout; adapter fan-out has an overall deadline; neither blocks the CLI indefinitely.
-- **No auth bypass**: the app must not solve captchas, bypass Cloudflare challenges, or authenticate to private trackers. Public read-only endpoints only. OpenSubtitles uses its official API key flow and does not scrape the website.
+- **Scraping resilience**: IMDb, Subscene, and YIFY Subtitles are scraped with `curl_cffi` browser impersonation. If a scrape fails (network error, HTML structure change, or block), degrade gracefully to free-text search or skip subtitles with a warning. Never hard-fail the entire pipeline due to a scraping failure.
+- **Timeouts**: every outbound HTTP call has a timeout; adapter fan-out has an overall deadline; neither blocks the CLI indefinitely.
+- **No auth bypass**: the app must not solve captchas or bypass Cloudflare challenges. `curl_cffi` browser impersonation is used only to avoid TLS-fingerprint blocks, not to solve interactive challenges. Public read-only endpoints only.
 - **Legal**: no bundled indexer lists, no bundled trackers beyond what the indexers themselves return, no hosted content, no seedbox functionality. Ship a `LEGAL.md` stating the tool is a client for user-chosen public indexers and that the user is responsible for compliance. No telemetry.
 - **Daemon lifecycle**: handle a stale `transmission-daemon` lock file, a port already in use, and RPC auth failures with distinct exit codes and remediation hints.
 - **Idempotency**: all commands safe to re-run, including the monitor tick.
@@ -153,18 +159,18 @@ downloads/
 
 ### R11 — Series-level downloads and monitoring
 
-- `download tv <query>` without `-s`/`-e` resolves the whole series via TMDB, enumerates every episode across every season, filters out episodes already `imported`, and enqueues the remainder respecting `max_concurrent_downloads`.
+- `download tv <query>` without `-s`/`-e` resolves the whole series via TVMaze, enumerates every episode across every season, filters out episodes already `imported`, and enqueues the remainder respecting `max_concurrent_downloads`.
 - Scope flags:
   - `-s N` → one season
   - `-s N -e M` → one episode
   - `--pack` → prefer season packs over per-episode releases (default governed by `prefer_season_packs`)
 - Season-pack handling: if a pack is chosen, it satisfies every episode in its season; episodes covered by an imported pack are marked `imported` in the episode table without individual torrents.
-- `series add <query>` resolves the show via TMDB, adds it to a `monitored_series` table with `tmdb_id`, `imdb_id`, `title`, `status`, `last_checked_at`, and the preferred quality profile, then performs an initial whole-series download.
-- `series list` shows each monitored show, its TMDB status, the last check time, the next known air date, and the count of imported/missing episodes.
+- `series add <query>` resolves the show via TVMaze, adds it to a `monitored_series` table with `tmdb_id` (stores TVMaze ID), `imdb_id`, `title`, `status`, `last_checked_at`, and the preferred quality profile, then performs an initial whole-series download.
+- `series list` shows each monitored show, its status, the last check time, the next known air date, and the count of imported/missing episodes.
 - `series remove <id>` stops monitoring and optionally removes downloaded files with `--delete-files`.
 - `series check <id>` forces an immediate check for that show, bypassing the normal tick.
 - `arr daemon` runs a loop on `monitor_poll_interval_minutes`:
-  1. For each monitored series, refresh TMDB episode data (respecting the shorter episode TTL).
+  1. For each monitored series, refresh TVMaze episode data (respecting the shorter episode TTL).
   2. Select episodes whose `air_date` is today or earlier, or within `monitor_lookahead_days` and marked as available on the indexer.
   3. Exclude episodes already `imported` or currently `downloading`.
   4. Search → rank → enqueue respecting `max_concurrent_downloads`.
@@ -175,21 +181,22 @@ downloads/
 - If an indexer is down during a tick, the affected episodes are recorded as `retry_pending` and retried on the next tick; a single indexer failure never halts the whole loop.
 - Ended/canceled series are still monitored but the tick naturally finds nothing new; `series list` marks them clearly. A config option `unmonitor_ended_series` (default `false`) controls whether ended shows are auto-removed from monitoring.
 
-### R12 — Subtitles (English by default)
+### R12 — Subtitles (English by default, no API keys)
 
 - Default behavior: every movie and TV episode import attempts to leave an English subtitle file next to the media file named `<media basename>.en.srt`.
 - Source priority:
   1. **Embedded or sibling subtitles in the torrent.** Sibling `.srt`/`.ass`/`.sub` files are imported and renamed. `.ass` and `.sub` are converted to `.srt` only if `ffmpeg` is available; otherwise they are copied with their original extension and renamed to `<basename>.en.<ext>`.
-  2. **OpenSubtitles API** if `opensubtitles_api_key` is configured and no English subtitle was found in the torrent. Uses the official REST API with the configured key.
-  3. **Skip with a warning** if neither source yields a subtitle. The media file is still imported; missing subtitles are recorded in the `subtitles` table with state `missing`.
+  2. **Subscene** (scraped with `curl_cffi`) if no English subtitle was found in the torrent. Search by title/IMDB ID + season/episode. Parse results with `selectolax`.
+  3. **YIFY Subtitles** (scraped with `curl_cffi`) as fallback if Subscene fails or returns no results.
+  4. **Skip with a warning** if neither source yields a subtitle. The media file is still imported; missing subtitles are recorded in the `subtitles` table with state `missing`.
 - Language selection is driven by `subtitle_languages` (default `["en"]`). Multiple languages produce multiple files (`<basename>.en.srt`, `<basename>.es.srt`).
-- `subtitles_forced_only` (default `false`) filters OpenSubtitles results to forced subtitles only when enabled.
-- Subtitle lookup for TV is per-episode: uses `imdb_id` + season + episode. For movies: `imdb_id` or `tmdb_id`.
-- If OpenSubtitles returns multiple candidates, pick by (hearing-impaired match to config) → (download count desc) → (release name similarity to the torrent name desc) → (upload date desc). Deterministic.
+- `subtitles_forced_only` (default `false`) filters subtitle results to forced subtitles only when enabled.
+- Subtitle lookup for TV is per-episode: uses `imdb_id` + season + episode. For movies: `imdb_id` or title.
+- If multiple candidates are returned, pick by (hearing-impaired match to config) → (download count desc) → (release name similarity to the torrent name desc) → (upload date desc). Deterministic.
 - Subtitle fetch runs **after** a successful import so a failure never blocks the media file from being available.
-- `subtitles_enabled = false` disables the entire subsystem, including OpenSubtitles lookups and sibling-subtitle renaming.
-- The `subtitles` table in SQLite records: media path, language, source (`embedded`, `sibling`, `opensubtitles`, `missing`), state, and the OpenSubtitles subtitle ID when applicable.
-- Respect the OpenSubtitles daily download quota; on quota exhaustion, record `quota_exceeded` and retry on the next daemon tick rather than failing the import.
+- `subtitles_enabled = false` disables the entire subsystem, including Subscene/YIFY lookups and sibling-subtitle renaming.
+- The `subtitles` table in SQLite records: media path, language, source (`embedded`, `sibling`, `subscene`, `yify`, `missing`), state, and the subtitle ID when applicable.
+- Respect rate limits on scraping; on HTTP 429 or block, record `error` and retry on the next daemon tick rather than failing the import.
 
 ### R13 — Windows launcher and `uv`-based bootstrap
 
@@ -210,7 +217,7 @@ downloads/
 
 - [x] R1 implemented — CLI, exit codes, config, redaction, TV scope flags
 - [x] R2 implemented — transmission lifecycle + RPC + concurrency limit
-- [x] R3 implemented — TMDB resolve with cache, short episode TTL
+- [x] R3 implemented — TVMaze resolve with cache, short episode TTL
 - [x] R4 implemented — YTS, EZTV, Nyaa adapters behind one interface
 - [x] R5 implemented — parser, hard filters, deterministic ranking, `--explain`
 - [x] R6 implemented — infohash + episode dedupe, queue, state machine
@@ -219,7 +226,7 @@ downloads/
 - [x] R9 implemented — config-driven URLs, backoff, caching, timeouts, no auth bypass, `LEGAL.md`, daemon failure handling
 - [x] R10 implemented — pytest suite, fixture-based adapter tests, integration import test, README, LEGAL, GOTCHAS
 - [x] R11 implemented — whole-series download, `series add/list/remove/check`, `daemon` monitor loop, idempotent ticks, retry_pending handling
-- [x] R12 implemented — sibling/embedded subtitle import, OpenSubtitles fallback, `.en.srt` naming, quota handling, `subtitles` table
+- [x] R12 implemented — sibling/embedded subtitle import, Subscene/YIFY fallback, `.en.srt` naming, rate-limit handling, `subtitles` table
 - [x] R13 implemented — `run.bat` + `run.sh` use `uv sync` and `uv run`, idempotent, pause on error
 - [x] `uv run pytest` passes with no network access
 - [x] `uv run ruff check .` and `uv run mypy arr` pass
@@ -235,16 +242,17 @@ downloads/
 - **Language**: Python 3.11+ (3.10 supported via `tomli` backport).
 - **Package manager**: **`uv` only.** `pyproject.toml` + `uv.lock`. No `pip`, no `poetry`, no `pipenv`, no `conda` anywhere in the repo, docs, scripts, or CI. `run.bat` and `run.sh` call `uv sync` and `uv run`.
 - **Runtime dependency**: `transmission-daemon` and `transmission-remote`. `ffmpeg` is optional and only used for `.ass`/`.sub` → `.srt` conversion; without it, subtitle files are copied with their original extension.
-- **Third-party libraries**: `typer`, `httpx`, `pydantic`, `guessit`, `rich`, `tomli` (3.10 only). Stdlib `sqlite3` for storage. Dev: `pytest`, `respx`, `ruff`, `mypy`. No `requests` (use `httpx`), no ORM.
+- **Third-party libraries**: `typer`, `httpx`, `pydantic`, `guessit`, `rich`, `tomli` (3.10 only), `curl_cffi` (browser-impersonation scraping), `selectolax` (fast HTML parsing). Stdlib `sqlite3` for storage. Dev: `pytest`, `respx`, `ruff`, `mypy`. No `requests` (use `httpx`), no ORM.
 - **No GUI, no TUI** in v1. CLI output plus `--json` only.
 - **No embedded torrent client.** Do not implement DHT, trackers, or peer wire protocol. Transmission owns that.
 - **No bundled indexers, trackers, or content.** Indexers are user-configured public endpoints.
-- **No authentication bypass** of any kind, including captcha solving and Cloudflare circumvention. OpenSubtitles uses the official API only.
+- **No authentication bypass** of any kind, including captcha solving and Cloudflare circumvention. `curl_cffi` browser impersonation is used only to avoid TLS-fingerprint blocks on IMDb, Subscene, and YIFY Subtitles.
 - **No telemetry, no phone-home**, no analytics.
 - **Library root is exactly** `downloads/movies` and `downloads/tv-shows`; staging lives in `.incomplete/` subdirectories and is never treated as library content.
 - **Naming must be Sonarr/Radarr-compatible**; Plex/Jellyfin must identify imported files and subtitles without manual matching.
-- Secrets (TMDB key, OpenSubtitles key, RPC password) must never appear in logs, `--json` output, or committed files.
+- Secrets (RPC password) must never appear in logs, `--json` output, or committed files.
 - All network calls must be cancellable with timeouts.
 - **Subtitles default to English.** Disabling them requires `subtitles_enabled = false` in config.
 - **TV defaults to whole-series.** Single episode requires explicit `-s N -e M`.
+- **No API keys.** All metadata and subtitle sources are free (TVMaze REST API) or scraped (IMDb, Subscene, YIFY Subtitles).
 - Out-of-scope for v1, explicitly: multi-user, VPN kill switch, quality upgrades of existing files, anime absolute-number remapping, web UI, private trackers, non-English subtitle UI, subtitle translation.
