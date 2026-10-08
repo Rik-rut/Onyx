@@ -2,16 +2,17 @@
 
 Status: IN_PROGRESS
 
-Iteration: 24
+Iteration: 25
 
 Current Objective:
-Fix a real daemon-import bug: downloads were imported as soon as their staging directory existed, not when complete.
+Harden import path resolution so a completed download never imports the shared `.incomplete/` staging root.
 
 Completed:
-- (Iterations 17-24) No-API-key migration; real orchestration; EZTV title gate; `max_concurrent_downloads`; season-pack preference; `unmonitor_ended_series`; `series_check`; daemon stale-lock/port errors; R8 policy on `queue` + time-mode fix; filename sanitizer.
-- (Iteration 25)
-  - Fixed `_poll_and_import`: it imported any record whose `download_dir` existed, which is always true (the `.incomplete/` staging dir is created when a torrent is added), so in-progress partial downloads could be imported. It now imports only records with `state == "completed"`.
-  - Added `tests/test_pipeline.py::test_poll_and_import_only_imports_completed` proving a `downloading` record with an existing dir is skipped and a `completed` record is imported.
+- (Iterations 17-25) No-API-key migration; real orchestration; EZTV title gate; `max_concurrent_downloads`; season-pack preference; `unmonitor_ended_series`; `series_check`; daemon stale-lock/port errors; R8 policy on `queue` + time-mode fix; filename sanitizer; `_poll_and_import` completion gate.
+- (Iteration 26)
+  - Added `_resolve_content(rec)`: prefers the per-torrent `content_path`, and only falls back to `download_dir` when it is not the shared `.incomplete/` staging dir (importing the staging root would mix every torrent's files).
+  - `_import_record` and `_poll_and_import` now use `_resolve_content`.
+  - Added `tests/test_pipeline.py::test_resolve_content_rejects_shared_staging_root`.
 
 Current Work:
 Executing autonomous iteration.
@@ -26,4 +27,4 @@ Next Action:
 Human runs the E2E download smokes against a running transmission-daemon, then marks DoD 233-236 and sets Status: COMPLETE.
 
 Last Updated:
-2026-10-08T14:58:09.950217+00:00
+2026-10-08T14:59:37.517967+00:00

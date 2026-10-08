@@ -656,10 +656,29 @@ def _delete_series_files(series: dict, cfg: Config, db: DB) -> int:
     return removed
 
 
+def _resolve_content(rec: dict) -> Path | None:
+    """Path to import from, or None if it can't be determined safely.
+
+    Prefers the per-torrent `content_path` recorded from the daemon. Falls back
+    to `download_dir` only when that is *not* the shared `.incomplete/` staging
+    dir, since importing the staging root would mix every torrent's files.
+    """
+    cp = rec.get("content_path")
+    if cp:
+        return Path(str(cp))
+    dd = rec.get("download_dir")
+    if not dd:
+        return None
+    p = Path(str(dd))
+    if p.name == ".incomplete":
+        return None
+    return p
+
+
 def _import_record(rec: dict, cfg: Config, db: DB, *, overwrite: bool = False) -> Path | None:
     """Import one completed download's content into the library. Idempotent."""
-    content = Path(str(rec.get("content_path") or rec.get("download_dir") or ""))
-    if not content.exists():
+    content = _resolve_content(rec)
+    if content is None or not content.exists():
         return None
     media_type = rec.get("media_type")
     mode = _import_mode(cfg)
@@ -858,8 +877,8 @@ def _poll_and_import(cfg: Config, db: DB) -> int:
         # moment a torrent is added, so its presence is not a completion signal.
         if rec.get("state") != "completed":
             continue
-        content = Path(str(rec.get("content_path") or rec.get("download_dir") or ""))
-        if not content.exists():
+        content = _resolve_content(rec)
+        if content is None or not content.exists():
             continue
         final = _import_record(rec, cfg, db)
         if final:

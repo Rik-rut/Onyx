@@ -332,6 +332,25 @@ def test_poll_and_import_only_imports_completed(tmp_path, monkeypatch):
     db.close()
 
 
+def test_resolve_content_rejects_shared_staging_root(tmp_path):
+    """A completed record with no content_path must not import the .incomplete root."""
+    staging = tmp_path / "downloads" / "movies" / ".incomplete"
+    staging.mkdir(parents=True)
+    (staging / "some_other_torrent.mkv").write_bytes(b"x")
+    rec = {"download_dir": str(staging), "content_path": None}
+    assert pipeline._resolve_content(rec) is None
+    # a specific per-torrent directory is acceptable
+    specific = staging / "Inception.2010"
+    specific.mkdir()
+    assert pipeline._resolve_content(
+        {"download_dir": str(specific), "content_path": None}
+    ) == specific
+    # content_path always wins
+    assert pipeline._resolve_content(
+        {"download_dir": str(staging), "content_path": str(specific)}
+    ) == specific
+
+
 def test_import_movie_record(tmp_path, monkeypatch):
     cfg = make_cfg(tmp_path)
     db = DB(tmp_path / "arr.db")
