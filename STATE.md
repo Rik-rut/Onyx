@@ -2,7 +2,7 @@
 
 Status: IN_PROGRESS
 
-Iteration: 5
+Iteration: 6
 
 Current Objective:
 Read TASK.md and begin implementation.
@@ -28,4 +28,4 @@ scaffold). Land R1–R9 and the movie smoke test before starting R11
 (monitoring) or R12 (subtitles) — see the scope warning in PLAN.md.
 
 Last Updated:
-2026-10-08T00:28:14.241202+00:00
+2026-10-08T00:28:16.723087+00:00
