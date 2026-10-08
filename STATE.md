@@ -2,7 +2,7 @@
 
 Status: IN_PROGRESS
 
-Iteration: 3
+Iteration: 4
 
 Current Objective:
 Scaffold complete; proceed to release parsing/ranking and core domain wiring.
@@ -18,9 +18,12 @@ Completed:
 - Implemented `src/arr/indexers/` (base HttpClient with per-indexer throttle, 429/503 backoff+jitter, TTL disk cache, User-Agent config; yts/eztv/nyaa adapters, SchemaMismatchError naming adapter+URL) and tests/test_indexers.py (5 respx tests passing).
 - Implemented `src/arr/metadata/tmdb.py` (search movie/tv, tv_details/external_ids, season episode lists, full_series, disk cache with per-type TTL — 6h for Returning Series season fetches — stale-cache fallback on error) and tests/test_tmdb.py (3 respx tests passing). Added `tmdb_base_url` to config defaults.
 - Implemented `src/arr/db.py` SQLite layer (downloads/episodes/events/monitored_series/subtitles tables, infohash dedupe add, episode state upsert, monitored CRUD, subtitle records) and tests/test_db.py (5 tests passing).
+- Implemented `src/arr/importer/layout.py` (movie_dest/episode_dest Sonarr+Radarr-compatible naming, junk filtering incl. Sample/extras, media_files/subtitle_files enumeration, import_file hardlink→copy fallback with EXDEV tolerance, collision detection via size+sha1, import_movie/import_episode with sibling subtitle renaming to `<basename>.en.<ext>`, season-pack per-episode import) and tests/test_importer.py (6 tests passing).
+- Wired `pipeline.search`: TMDB resolve (best-effort, degrades to free-text with stderr warning) → adapter fan-out via asyncio.gather with 30s per-adapter timeout (per-adapter failure isolated) → parse/filter/rank via `core.parsing` → releases. `--explain` hook prints filter reasons/score components to stderr.
+- Implemented `src/arr/seeding.py` (ratio/time/manual/remove_on_import modes, `validate_seeding` refuses remove_on_import+hardlink with explanation, `should_remove` policy evaluator, HARDLINK_NOTICE) and tests/test_seeding.py (5 tests).
 
 Current Work:
-R6 SQLite state layer done. Next: import pipeline (R7) + seeding policy (R8).
+R8 seeding done and `arr.search` pipeline wired. Next: R11 series orchestration + R12 subtitles, then download pipeline, docs, run.bat.
 
 Last Test Result:
 PASSED
@@ -29,7 +32,7 @@ Current Problem:
 transmission-daemon/transmission-remote not installed on this machine — R2 runtime integration tests and the R13 end-to-end smoke tests will hit exit-code-4 dependency-unavailable handling until Transmission is installed.
 
 Next Action:
-Implement PLAN.md step 13: `src/arr/importer/` — library layout (downloads/movies, downloads/tv-shows, .incomplete staging), filename templates for Sonarr/Radarr compat, junk filtering, hardlink→copy fallback (errno.EXDEV), collision handling, sibling subtitle renaming, multi-file/season-pack distribution, idempotent import. Integration test with tmp_path + fake payload.
+Implement R11 (`src/arr/series/`): scope resolution (series/season/episode via TMDB, pack preference), episode-level dedupe against the episodes table, pack-coverage marking imported episodes, then `series add/list/remove/check` + `daemon` monitor tick with retry_pending and idempotency. Then R12 subtitles.
 
 Last Updated:
-2026-10-08T00:48:56.470125+00:00
+2026-10-08T00:59:09.787164+00:00
