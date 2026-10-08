@@ -16,6 +16,7 @@ SECRET_KEYS = ("tmdb_api_key", "opensubtitles_api_key", "transmission_rpc_pass")
 
 DEFAULTS: dict = {
     "tmdb_api_key": "",
+    "tmdb_base_url": "https://api.themoviedb.org/3",
     "opensubtitles_api_key": "",
     "download_root": "downloads",
     "library_root": "downloads",
