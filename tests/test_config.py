@@ -47,3 +47,26 @@ def test_default_config_path_is_platform_appropriate():
     p = Path(default_config_path())
     assert p.name == "config.toml"
     assert "arr" in p.parts
+
+
+def test_config_template_documents_every_default_key():
+    """`config init` must document every configurable key (R1)."""
+    import re
+
+    from arr.config.settings import CONFIG_TEMPLATE, DEFAULTS
+
+    tmpl_keys = set(re.findall(r"^([a-z_]+)\s*=", CONFIG_TEMPLATE, re.M))
+    missing = set(DEFAULTS) - tmpl_keys
+    assert not missing, f"undocumented default keys: {sorted(missing)}"
+
+
+def test_config_template_round_trips(tmp_path):
+    from arr.config.settings import init_config, load_config
+
+    p = tmp_path / "config.toml"
+    init_config(p)
+    cfg = load_config(p)
+    assert cfg.get("episode_cache_ttl_hours") == 6
+    assert cfg.get("resolutions") == ["2160p", "1080p", "720p"]
+    assert cfg.get("request_interval_seconds") == {"yts": 1.0, "eztv": 1.0, "nyaa": 2.0}
+    assert cfg.get("imdb_suggestion_base_url", "").startswith("https://")

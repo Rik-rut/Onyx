@@ -64,6 +64,8 @@ CONFIG_TEMPLATE = """\
 # Metadata / subtitle source base URLs (free or scraped; no API keys)
 tvmaze_base_url = "https://api.tvmaze.com"
 imdb_base_url = "https://www.imdb.com"
+# IMDb suggestion JSON endpoint (fallback when the HTML search is bot-blocked)
+imdb_suggestion_base_url = "https://v3.sg.media-imdb.com/suggestion"
 subscene_base_url = "https://subscene.com"
 yify_subtitles_base_url = "https://yifysubtitles.ch"
 
@@ -91,6 +93,18 @@ import_mode = "hardlink"   # hardlink | copy | move
 
 user_agent = "arr/0.1"
 min_seeders = 1
+
+# Quality / size filters (per media type, megabytes)
+resolutions = ["2160p", "1080p", "720p"]
+min_size_mb_movie = 200
+max_size_mb_movie = 80000
+min_size_mb_tv = 100
+max_size_mb_tv = 80000
+
+# Response caching and per-indexer request spacing (seconds)
+cache_ttl_hours = 24
+episode_cache_ttl_hours = 6
+request_interval_seconds = { yts = 1.0, eztv = 1.0, nyaa = 2.0 }
 
 subtitle_languages = ["en"]
 subtitles_enabled = true
