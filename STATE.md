@@ -2,28 +2,31 @@
 
 Status: IN_PROGRESS
 
-Iteration: 30
+Iteration: 33
 
 Current Objective:
-Harden `cancel <id>` (R6): correct exit code for unknown ids and tolerance when the daemon is unreachable.
+Make `run.bat` robust so it does not crash/fail regardless of how it is launched.
 
 Completed:
-- (Iterations 17-30) No-API-key migration; real orchestration; EZTV title gate; `max_concurrent_downloads`; season-pack preference; `unmonitor_ended_series`; `series_check`; daemon stale-lock/port errors; R8 policy on `queue` + time-mode fix; filename sanitizer; completion-gated import; staging-root guard; YTS zero-result fix; per-episode subtitle filtering; complete config template; `--transmission-remote` + exit-4 unreachable daemon.
-- (Iteration 31)
-  - `cancel_download` now exits `3` for an unknown id (previously silently exited 0) and tolerates both `DependencyUnavailable` and `RpcError` (torrent already gone) by marking the record `skipped` locally, printing which case occurred.
-  - Added `tests/test_pipeline.py`: `test_cancel_unknown_exits_3`, `test_cancel_marks_skipped_when_daemon_unreachable`.
-
-Current Work:
-Executing autonomous iteration.
+- (Iterations 17-32) No-API-key migration; real orchestration; indexer/import/daemon correctness fixes; `--transmission-remote`; cancel hardening; complete config template; initial run.bat cwd fix.
+- (Iteration 33)
+  - Hardened `run.bat` into a bulletproof launcher:
+    - `pushd "%~dp0"` so it always runs from the repo root (any cwd/Explorer/shortcut) and `popd` on every exit path.
+    - Resolves `uv` explicitly: first via PATH, then probes `%USERPROFILE%\.local\bin`, `.cargo\bin`, `%APPDATA%\uv`, `%LOCALAPPDATA%\Programs\uv`, scoop shims — because GUI/Explorer launches often inherit a stale PATH where `where uv` fails.
+    - Removed the fragile `%cmdcmdline% | find` double-click detection that could itself throw a parse error when the command line contained quotes/`&`.
+    - No-arg (double-click): runs `arr --help`, prints usage examples, and always `pause`s so the window stays open. Arg runs pause only on error.
+    - Uses `!errorlevel!` (delayed expansion) so exit codes are not stale inside blocks.
+  - Verified: `run.bat version` (exit 0), no-args (exit 0, help + examples), `cancel nope` (exit 3), stale-PATH launch (exit 0), from `C:\Windows` (exit 0), Explorer-style quoted launch (exit 0); `uv run arr version` works; `bash -n run.sh` clean; ruff/mypy/pytest all pass.
+  - Documented the double-click/PATH failure modes in GOTCHAS.md.
 
 Last Test Result:
-PASSED
+`uv run ruff check .` → clean; `uv run mypy arr` → clean; `uv run pytest -q` → 114 passed, 1 deselected.
 
 Current Problem:
-The three end-to-end download smokes in TASK DoD (lines 233-236) require transferring real copyrighted media through a running transmission-daemon; not performed by the agent.
+The user still reports `run.bat` failing; the agent cannot reproduce it in this environment (every launcher path tested exits 0/3 correctly). Need the exact error text/copy-pasted output from the user to diagnose further.
 
 Next Action:
-Human runs the E2E download smokes against a running transmission-daemon, then marks DoD 233-236 and sets Status: COMPLETE.
+Ask the user for the exact text shown in the crash window (or the command they run) since the launcher now covers cwd, PATH, and double-click cases.
 
 Last Updated:
-2026-10-08T15:09:08.902123+00:00
+2026-10-09T02:30:00+00:00

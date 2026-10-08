@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -u
 
+# Always operate from the repo root, regardless of the caller's cwd.
+cd "$(dirname "$0")" || { echo "Failed to cd to script directory."; exit 1; }
+
 if ! command -v uv >/dev/null 2>&1; then
     echo "uv is not installed. Install it with:"
     echo '  curl -LsSf https://astral.sh/uv/install.sh | sh'

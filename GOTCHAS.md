@@ -45,5 +45,13 @@
 - **Secrets** — the Transmission RPC password is redacted in logs and `config show` unless
   `--show-secrets`. No API keys exist (all metadata/subtitle sources are free or scraped).
 - **`run.bat` idempotency** — `uv sync` is a no-op when the lockfile/env are current; no sentinel file.
+- **`run.bat` / `run.sh` working directory** — both `cd` to their own directory first, so launching from
+  Explorer, a shortcut, or any other cwd still finds `pyproject.toml` (otherwise `uv sync` fails with
+  "No `pyproject.toml` found").
+- **`run.bat` when `uv` isn't on PATH (Explorer double-click)** — GUI launches can inherit a stale PATH.
+  The launcher probes `%USERPROFILE%\.local\bin`, `.cargo\bin`, `%APPDATA%\uv`, `%LOCALAPPDATA%\Programs\uv`,
+  and scoop shims before reporting uv missing.
+- **`run.bat` double-click window closing** — with no arguments it runs `arr --help` and always `pause`s,
+  so the output stays readable. Terminal runs with arguments still honor the real exit code.
 - **`uv` missing on a clean machine** — `run.bat` prints the install command and exits non-zero with a
   `pause`.
