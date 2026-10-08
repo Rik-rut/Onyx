@@ -225,7 +225,11 @@ def import_episode(
     mode: str = "hardlink",
     overwrite: bool = False,
 ) -> Path | None:
-    files = media_files(content) if content.is_dir() else [content]
+    if content.is_dir():
+        matched = find_episode_file(content, season, episode)
+        files = [matched] if matched is not None else media_files(content)
+    else:
+        files = [content]
     if not files:
         return None
     primary = max(files, key=lambda p: p.stat().st_size)
@@ -234,5 +238,40 @@ def import_episode(
         primary.suffix.lower(),
     )
     final = import_file(primary, dst, mode=mode, overwrite=overwrite)
-    import_subtitles(content if content.is_dir() else content.parent, final)
+    sub_root = content if content.is_dir() else content.parent
+    import_subtitles(
+        sub_root, final, only=_episode_sub_filter(sub_root, season, episode)
+    )
     return final
+
+
+def _normalize_name(path: Path) -> str:
+    return (
+        path.name.lower()
+        .replace(".", " ").replace("_", " ").replace("-", " ").replace(" ", "")
+    )
+
+
+def _is_tagged_for(path: Path, season: int, episode: int) -> bool:
+    n = _normalize_name(path)
+    return f"s{season:02d}e{episode:02d}" in n or f"{season}x{episode:02d}" in n
+
+
+def _has_any_episode_tag(path: Path) -> bool:
+    n = _normalize_name(path)
+    return bool(re.search(r"s\d{1,2}e\d{1,2}", n) or re.search(r"\d{1,2}x\d{1,2}", n))
+
+
+def _episode_sub_filter(
+    root: Path, season: int, episode: int
+) -> Callable[[Path], bool]:
+    """Select subtitles for one episode.
+
+    Episode-tagged subtitles win; an untagged subtitle is only used when no
+    tagged one exists for this episode, so an untagged file cannot take the
+    primary ``<basename>.<lang>.srt`` name from the correctly tagged sibling.
+    """
+    subs = subtitle_files(root)
+    if any(_is_tagged_for(s, season, episode) for s in subs):
+        return lambda s: _is_tagged_for(s, season, episode)
+    return lambda s: not _has_any_episode_tag(s)

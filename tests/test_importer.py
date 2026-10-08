@@ -89,3 +89,27 @@ def test_episode_import_distribution(tmp_path):
         f = import_episode(payload / name, lib, series, 1, ep, f"Ep{ep}")
         assert f is not None and f.exists()
         assert f.parent.name == "Season 01"
+
+
+def test_episode_import_does_not_cross_assign_subtitles(tmp_path):
+    """Importing S01E01 must not rename S01E02's subtitle to S01E01's basename."""
+    payload = tmp_path / "pack"
+    payload.mkdir()
+    (payload / "Show.S01E01.mkv").write_bytes(b"a" * 256)
+    (payload / "Show.S01E02.mkv").write_bytes(b"b" * 256)
+    (payload / "Show.S01E01.en.srt").write_text("ep1 subs")
+    (payload / "Show.S01E02.en.srt").write_text("ep2 subs")
+    (payload / "release.en.srt").write_text("untagged subs")
+    series = Series(tmdb_id=1, title="Show", year=2020)
+    lib = tmp_path / "lib"
+    f = import_episode(payload / "Show.S01E01.mkv", lib, series, 1, 1, "One")
+    assert f is not None
+    srt = f.parent / f"{f.stem}.en.srt"
+    assert srt.exists()
+    assert srt.read_text() == "ep1 subs"
+    # no stray subtitle for the other episode was placed
+    assert not (f.parent / "Show - S01E02 - .en.srt").exists()
+    # only two subtitle files should exist next to media (ep1 + untagged collision),
+    # but crucially ep2's subtitle content is not present
+    contents = {p.read_text() for p in f.parent.glob("*.srt")}
+    assert "ep2 subs" not in contents
