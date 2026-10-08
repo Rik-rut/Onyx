@@ -21,9 +21,28 @@ def test_episode_dest():
     )
     expected = (
         "downloads/tv-shows/Breaking Bad (2008)/Season 01/"
-        "Breaking Bad - S01E02 - Cat's in the Bag....mkv"
+        "Breaking Bad - S01E02 - Cat's in the Bag.mkv"
     )
     assert p == Path(expected)
+
+
+def test_sanitize_illegal_characters():
+    from arr.importer.layout import sanitize_name
+
+    assert sanitize_name("Star Trek: Discovery") == "Star Trek - Discovery"
+    assert sanitize_name("What If...?") == "What If"
+    assert sanitize_name('Bad/Name\\With*Chars') == "BadNameWithChars"
+    assert sanitize_name("  Trailing dots...  ") == "Trailing dots"
+    assert sanitize_name("") == "Unknown"
+    assert sanitize_name("CON") == "_CON"
+
+
+def test_movie_dest_sanitizes_title():
+    p = movie_dest(Path("downloads"), "Star Trek: The Motion Picture", 1979, ".mkv")
+    assert p == Path(
+        "downloads/movies/Star Trek - The Motion Picture (1979)/"
+        "Star Trek - The Motion Picture (1979).mkv"
+    )
 
 
 def test_junk_filtered(tmp_path):

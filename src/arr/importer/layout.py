@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shutil
 from collections.abc import Callable
 from pathlib import Path
@@ -12,6 +13,28 @@ JUNK_NAMES = {".ds_store", "thumbs.db"}
 JUNK_EXTS = {".nfo", ".txt", ".url", ".md", ".jpg", ".png"}
 MEDIA_EXTS = {".mkv", ".mp4", ".avi", ".mov", ".wmv", ".m4v", ".ts", ".webm"}
 SUB_EXTS = {".srt", ".ass", ".sub", ".vtt"}
+
+# Characters illegal in Windows filenames (also stripped for cross-platform
+# safety). Colon is rendered as " - " to match Sonarr/Radarr conventions.
+_ILLEGAL_CHARS = '<>"/\\|?*'
+_WINDOWS_RESERVED = {
+    "CON", "PRN", "AUX", "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+}
+
+
+def sanitize_name(name: str) -> str:
+    """Turn a human title into a filesystem-safe, Sonarr/Radarr-style name."""
+    out = str(name or "").replace(":", " - ")
+    for ch in _ILLEGAL_CHARS:
+        out = out.replace(ch, "")
+    out = re.sub(r"\s+", " ", out).strip().rstrip(" .")
+    if not out:
+        return "Unknown"
+    if out.upper() in _WINDOWS_RESERVED:
+        out = f"_{out}"
+    return out
 
 
 def _sha1(path: Path, limit: int = 4 * 1024 * 1024) -> str:
@@ -68,7 +91,8 @@ def matches_episode(path: Path, season: int, episode: int) -> bool:
 
 
 def movie_dest(library_root: Path, title: str, year: int | None, ext: str) -> Path:
-    folder = f"{title} ({year})" if year else title
+    safe = sanitize_name(title)
+    folder = f"{safe} ({year})" if year else safe
     return library_root / "movies" / folder / f"{folder}{ext}"
 
 
@@ -81,9 +105,14 @@ def episode_dest(
     episode_title: str,
     ext: str,
 ) -> Path:
-    show_folder = f"{show} ({year})" if year else show
+    safe_show = sanitize_name(show)
+    show_folder = f"{safe_show} ({year})" if year else safe_show
     season_folder = f"Season {season:02d}"
-    fname = f"{show} - S{season:02d}E{episode:02d} - {episode_title}{ext}"
+    safe_ep = sanitize_name(episode_title) if episode_title else ""
+    if safe_ep:
+        fname = f"{safe_show} - S{season:02d}E{episode:02d} - {safe_ep}{ext}"
+    else:
+        fname = f"{safe_show} - S{season:02d}E{episode:02d}{ext}"
     return library_root / "tv-shows" / show_folder / season_folder / fname
 
 

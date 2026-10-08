@@ -627,8 +627,10 @@ def series_remove(series_id, cfg, delete_files=False):
 
 
 def _delete_series_files(series: dict, cfg: Config, db: DB) -> int:
+    from arr.importer.layout import sanitize_name
+
     root = _library_root(cfg) / "tv-shows"
-    title = str(series["title"])
+    title = sanitize_name(str(series["title"]))
     candidates = [root / title]
     if root.exists():
         candidates.extend(

@@ -2,19 +2,17 @@
 
 Status: IN_PROGRESS
 
-Iteration: 22
+Iteration: 23
 
 Current Objective:
-Complete R8 seeding-policy coverage: evaluate the policy on `queue` (not only the daemon tick) and support `time` mode via `secondsSeeding`.
+Fix a real import-correctness bug: metadata titles containing filesystem-illegal characters produced invalid library paths.
 
 Completed:
-- (Iterations 17-22) No-API-key migration; real orchestration; EZTV title gate; `max_concurrent_downloads`; season-pack preference; `unmonitor_ended_series`; `series_check` force-check; daemon stale-lock/port-in-use errors.
-- (Iteration 23)
-  - `seeding.py`: added `evaluate_torrent(torrent, mode, ...)` which extracts `uploadRatio` and `secondsSeeding` (hours) from a Transmission torrent dict so `time` mode actually works (previously `hours_seeded` was never passed, so time mode could never fire).
-  - `transmission/process.py`: `list_torrents` now also requests `secondsSeeding` and `doneDate`.
-  - `pipeline._apply_seeding_policy` uses `evaluate_torrent` and passes `seed_time_hours`.
-  - `pipeline.list_queue` now runs `_sync_rpc_state` + `_apply_seeding_policy` so R8 policy evaluation happens on `queue`; still returns `[]` and exits 0 when transmission is unreachable.
-  - Added `tests/test_seeding.py` cases for `evaluate_torrent` (ratio, time-from-seconds, manual).
+- (Iterations 17-23) No-API-key migration; real orchestration; EZTV title gate; `max_concurrent_downloads`; season-pack preference; `unmonitor_ended_series`; `series_check`; daemon stale-lock/port errors; R8 policy on `queue` + time-mode fix.
+- (Iteration 24)
+  - Added `sanitize_name` to `importer/layout.py`: replaces `:` with ` - ` (Sonarr style), strips `< > " / \ | ? *`, collapses whitespace, trims trailing dots/spaces (illegal on Windows), and guards Windows reserved device names (CON, NUL, COM1..).
+  - Applied it in `movie_dest` and `episode_dest` for both the folder and file stem, and in `pipeline._delete_series_files` so `series remove --delete-files` still matches sanitized folders.
+  - Added tests: `sanitize_name` cases, a sanitized `movie_dest`, and updated `test_episode_dest` (trailing `...` is now stripped).
 
 Current Work:
 Executing autonomous iteration.
@@ -29,4 +27,4 @@ Next Action:
 Human runs the E2E download smokes against a running transmission-daemon, then marks DoD 233-236 and sets Status: COMPLETE.
 
 Last Updated:
-2026-10-08T14:55:40.094783+00:00
+2026-10-08T14:57:03.647932+00:00
