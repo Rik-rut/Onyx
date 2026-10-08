@@ -54,6 +54,7 @@ DEFAULTS: dict = {
     "cache_ttl_hours": 24,
     "episode_cache_ttl_hours": 6,
     "request_interval_seconds": {"yts": 1.0, "eztv": 1.0, "nyaa": 2.0},
+    "title_strict_indexers": ["eztv"],
 }
 
 CONFIG_TEMPLATE = """\
@@ -101,6 +102,10 @@ prefer_season_packs = true
 monitor_poll_interval_minutes = 30
 monitor_lookahead_days = 7
 unmonitor_ended_series = false
+
+# Indexers whose search results are title-validated (they may return
+# unrelated latest torrents when a query does not match).
+title_strict_indexers = ["eztv"]
 """
 
 

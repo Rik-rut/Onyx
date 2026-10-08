@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import difflib
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -132,9 +134,40 @@ class Scored:
     rejected: str | None = None
 
 
+def _norm_tokens(s: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", s.lower()).strip()
+
+
+def _title_relevant(r: Release, q: Query) -> bool:
+    """Reject releases whose title does not plausibly match the query.
+
+    Some indexers (notably EZTV) return their latest torrents when no entry
+    matches, so a title check is required. Only applied to indexers listed in
+    ``title_strict_indexers`` (default ``["eztv"]``) to avoid rejecting
+    romanized anime titles from Nyaa.
+    """
+    wanted = _norm_tokens(q.title or q.text or "")
+    if not wanted:
+        return True
+    have = _norm_tokens(r.title)
+    if not have:
+        return False
+    if wanted in have:
+        return True
+    if difflib.SequenceMatcher(None, wanted, have).ratio() >= 0.6:
+        return True
+    ws, hs = set(wanted.split()), set(have.split())
+    if ws and len(ws & hs) / len(ws) >= 0.8:
+        return True
+    return False
+
+
 def hard_filter(r: Release, q: Query, profile: QualityProfile, cfg: dict) -> str | None:
     if _is_bad(r):
         return "bad source/quality (CAM/TS/TC/R5/sample/password)"
+    strict = cfg.get("title_strict_indexers", ["eztv"]) or []
+    if r.indexer in strict and not _title_relevant(r, q):
+        return f"title {r.title!r} does not match {q.title or q.text!r}"
     min_seeders = int(cfg.get("min_seeders", profile.min_seeders))
     if r.seeds < min_seeders:
         return f"seeders {r.seeds} < {min_seeders}"

@@ -106,3 +106,39 @@ def test_explain_output():
     r = mk("Movie.2020.1080p.BluRay.x265", seeds=3)
     ex = explain(rank([r], q, QualityProfile(), cfg))
     assert "seeders=3" in ex
+
+
+def test_title_mismatch_rejected_for_strict_indexer():
+    """EZTV returns unrelated latest torrents; the title gate must reject them."""
+    q = Query(media_type=MediaType.TV, text="zzzznotarealshowzzz")
+    cfg = {"min_seeders": 1, "title_strict_indexers": ["eztv"]}
+    r = mk(
+        "Some.Other.Show.S01E01.1080p.WEB-DL.x264",
+        media_type=MediaType.TV, indexer="eztv",
+    )
+    s = rank([r], q, QualityProfile(), cfg)[0]
+    assert s.rejected is not None
+    assert "does not match" in s.rejected
+
+
+def test_title_match_passes_strict_indexer():
+    q = Query(media_type=MediaType.TV, title="Game of Thrones")
+    cfg = {"min_seeders": 1, "title_strict_indexers": ["eztv"]}
+    r = mk(
+        "Game.of.Thrones.S01E01.1080p.WEB-DL.x264",
+        media_type=MediaType.TV, indexer="eztv",
+    )
+    s = rank([r], q, QualityProfile(), cfg)[0]
+    assert s.rejected is None
+
+
+def test_title_gate_only_applies_to_configured_indexers():
+    """Nyaa romanized anime titles must not be rejected by the title gate."""
+    q = Query(media_type=MediaType.TV, text="Kimi no Na wa")
+    cfg = {"min_seeders": 1, "title_strict_indexers": ["eztv"]}
+    r = mk(
+        "Your Name (2016) [1080p] [BluRay]",
+        media_type=MediaType.TV, indexer="nyaa",
+    )
+    s = rank([r], q, QualityProfile(), cfg)[0]
+    assert s.rejected is None

@@ -18,6 +18,9 @@ class EztvAdapter:
 
     async def search(self, q: Query) -> list[Release]:
         url = f"{self.base_url}/api/get-torrents"
+        # EZTV filters by zero-padded numeric imdb id (tt0903747 -> 0903747) but
+        # silently returns its latest torrents when there is no match, so titles
+        # are validated in the ranker (see core.parsing title_strict_indexers).
         params: dict[str, object] = {"limit": q.limit}
         if q.imdb_id:
             params["imdb_id"] = q.imdb_id.lstrip("tt")
