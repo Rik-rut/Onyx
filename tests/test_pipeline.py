@@ -309,6 +309,29 @@ def test_group_by_season_and_pick_pack():
     assert pick_season_pack([ep]) is None
 
 
+def test_poll_and_import_only_imports_completed(tmp_path, monkeypatch):
+    """A dir existing is not completion; only state=='completed' is imported."""
+    cfg = make_cfg(tmp_path)
+    db = DB(tmp_path / "arr.db")
+    content = tmp_path / "downloads" / "movies" / ".incomplete" / "Inception.2010"
+    content.mkdir(parents=True)
+    (content / "Inception.2010.1080p.mkv").write_bytes(b"\x00" * 1024)
+    # 'downloading' record with an existing staging dir must NOT be imported
+    db.add_download(
+        "aaa".ljust(40, "0"), media_type="movie", title="Inception", year=2010,
+        download_dir=str(content), state="downloading",
+    )
+    n = pipeline._poll_and_import(cfg, db)
+    assert n == 0
+    assert db.get_download("aaa".ljust(40, "0"))["state"] == "downloading"
+    # now completed -> imported
+    db.set_download_state("aaa".ljust(40, "0"), "completed")
+    n2 = pipeline._poll_and_import(cfg, db)
+    assert n2 == 1
+    assert db.get_download("aaa".ljust(40, "0"))["state"] == "imported"
+    db.close()
+
+
 def test_import_movie_record(tmp_path, monkeypatch):
     cfg = make_cfg(tmp_path)
     db = DB(tmp_path / "arr.db")

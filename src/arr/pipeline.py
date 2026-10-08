@@ -854,7 +854,9 @@ def _poll_and_import(cfg: Config, db: DB) -> int:
     """Import any completed (non-imported) downloads. Returns count imported."""
     count = 0
     for rec in db.list_downloads():
-        if rec.get("state") in ("imported", "skipped", "failed"):
+        # only import fully-completed downloads; the staging dir exists from the
+        # moment a torrent is added, so its presence is not a completion signal.
+        if rec.get("state") != "completed":
             continue
         content = Path(str(rec.get("content_path") or rec.get("download_dir") or ""))
         if not content.exists():

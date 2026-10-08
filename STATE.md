@@ -2,17 +2,16 @@
 
 Status: IN_PROGRESS
 
-Iteration: 23
+Iteration: 24
 
 Current Objective:
-Fix a real import-correctness bug: metadata titles containing filesystem-illegal characters produced invalid library paths.
+Fix a real daemon-import bug: downloads were imported as soon as their staging directory existed, not when complete.
 
 Completed:
-- (Iterations 17-23) No-API-key migration; real orchestration; EZTV title gate; `max_concurrent_downloads`; season-pack preference; `unmonitor_ended_series`; `series_check`; daemon stale-lock/port errors; R8 policy on `queue` + time-mode fix.
-- (Iteration 24)
-  - Added `sanitize_name` to `importer/layout.py`: replaces `:` with ` - ` (Sonarr style), strips `< > " / \ | ? *`, collapses whitespace, trims trailing dots/spaces (illegal on Windows), and guards Windows reserved device names (CON, NUL, COM1..).
-  - Applied it in `movie_dest` and `episode_dest` for both the folder and file stem, and in `pipeline._delete_series_files` so `series remove --delete-files` still matches sanitized folders.
-  - Added tests: `sanitize_name` cases, a sanitized `movie_dest`, and updated `test_episode_dest` (trailing `...` is now stripped).
+- (Iterations 17-24) No-API-key migration; real orchestration; EZTV title gate; `max_concurrent_downloads`; season-pack preference; `unmonitor_ended_series`; `series_check`; daemon stale-lock/port errors; R8 policy on `queue` + time-mode fix; filename sanitizer.
+- (Iteration 25)
+  - Fixed `_poll_and_import`: it imported any record whose `download_dir` existed, which is always true (the `.incomplete/` staging dir is created when a torrent is added), so in-progress partial downloads could be imported. It now imports only records with `state == "completed"`.
+  - Added `tests/test_pipeline.py::test_poll_and_import_only_imports_completed` proving a `downloading` record with an existing dir is skipped and a `completed` record is imported.
 
 Current Work:
 Executing autonomous iteration.
@@ -27,4 +26,4 @@ Next Action:
 Human runs the E2E download smokes against a running transmission-daemon, then marks DoD 233-236 and sets Status: COMPLETE.
 
 Last Updated:
-2026-10-08T14:57:03.647932+00:00
+2026-10-08T14:58:09.950217+00:00
