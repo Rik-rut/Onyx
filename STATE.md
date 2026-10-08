@@ -2,7 +2,7 @@
 
 Status: IN_PROGRESS
 
-Iteration: 4
+Iteration: 5
 
 Current Objective:
 Scaffold complete; proceed to release parsing/ranking and core domain wiring.
@@ -21,9 +21,12 @@ Completed:
 - Implemented `src/arr/importer/layout.py` (movie_dest/episode_dest Sonarr+Radarr-compatible naming, junk filtering incl. Sample/extras, media_files/subtitle_files enumeration, import_file hardlink→copy fallback with EXDEV tolerance, collision detection via size+sha1, import_movie/import_episode with sibling subtitle renaming to `<basename>.en.<ext>`, season-pack per-episode import) and tests/test_importer.py (6 tests passing).
 - Wired `pipeline.search`: TMDB resolve (best-effort, degrades to free-text with stderr warning) → adapter fan-out via asyncio.gather with 30s per-adapter timeout (per-adapter failure isolated) → parse/filter/rank via `core.parsing` → releases. `--explain` hook prints filter reasons/score components to stderr.
 - Implemented `src/arr/seeding.py` (ratio/time/manual/remove_on_import modes, `validate_seeding` refuses remove_on_import+hardlink with explanation, `should_remove` policy evaluator, HARDLINK_NOTICE) and tests/test_seeding.py (5 tests).
+- Implemented R11 core: `src/arr/series/orchestration.py` (resolve_scope whole-series/season/episode, seasons_in_scope, needed_episodes dedupe vs downloads/episodes states queued/added/downloading/completed/imported, mark_pack_imported, episodes_in_season) and `src/arr/monitor/loop.py` (episode_airs_within_lookahead, select_airing, idempotent tick with per-series failure isolation, retry_pending on enqueue failure, last_checked updates). tests/test_series_monitor.py (9 tests, all passing).
+
+- Implemented R12 core: `src/arr/subtitles/opensubtitles.py` (OpenSubtitlesClient search/download via official REST + Api-Key auth, SubtitleCandidate, deterministic rank_candidates: hearing-impaired match → download count desc → release-name similarity desc → upload date desc, forced_only filter, QuotaExceeded on HTTP 429) and tests/test_subtitles.py (5 tests, all passing).
 
 Current Work:
-R8 seeding done and `arr.search` pipeline wired. Next: R11 series orchestration + R12 subtitles, then download pipeline, docs, run.bat.
+R12 subtitle client + ranking implemented. Next: wire subtitle fetch after import + implement the download pipeline (download_movie/download_tv), queue/status/cancel/import, and series/daemon CLI commands.
 
 Last Test Result:
 PASSED
@@ -32,7 +35,7 @@ Current Problem:
 transmission-daemon/transmission-remote not installed on this machine — R2 runtime integration tests and the R13 end-to-end smoke tests will hit exit-code-4 dependency-unavailable handling until Transmission is installed.
 
 Next Action:
-Implement R11 (`src/arr/series/`): scope resolution (series/season/episode via TMDB, pack preference), episode-level dedupe against the episodes table, pack-coverage marking imported episodes, then `series add/list/remove/check` + `daemon` monitor tick with retry_pending and idempotency. Then R12 subtitles.
+Wire subtitle fetch after successful import (sibling detection first, else OpenSubtitles fallback, record `missing`/`quota_exceeded` in subtitles table) and implement the download pipeline: `download_movie`/`download_tv` (search → scope confirm → dedupe → transmission add with max_concurrent_downloads → poll → import → subtitles → seeding notice), `queue`/`status`/`cancel`/`import`, and `series add/list/remove/check` + `daemon` tick wiring through monitor.loop.tick.
 
 Last Updated:
-2026-10-08T00:59:09.787164+00:00
+2026-10-08T01:07:17.347687+00:00
