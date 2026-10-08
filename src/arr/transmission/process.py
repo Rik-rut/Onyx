@@ -11,7 +11,9 @@ from pathlib import Path
 from arr.transmission.errors import (
     AuthError,
     DependencyUnavailable,
+    PortInUseError,
     RpcError,
+    StaleLockError,
     TransmissionError,
 )
 
@@ -57,6 +59,34 @@ def find_daemon() -> str | None:
     return find_binary("transmission-daemon")
 
 
+def port_in_use(port: int, *, timeout: float = 0.5) -> bool:
+    """True when something is already listening on 127.0.0.1:port."""
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(timeout)
+        return s.connect_ex(("127.0.0.1", port)) == 0
+
+
+def lock_file_paths() -> list[Path]:
+    """Known transmission-daemon lock file locations."""
+    home = Path.home()
+    if sys.platform == "win32":
+        appdata = os.environ.get("APPDATA") or os.environ.get("LOCALAPPDATA")
+        base = Path(appdata) / "Transmission" if appdata else home / "Transmission"
+    else:
+        base = home / ".config" / "transmission"
+    return [base / "transmission-daemon" / "lock", base / "lock"]
+
+
+def find_stale_lock() -> Path | None:
+    """Return an existing transmission-daemon lock file, if any."""
+    for lock in lock_file_paths():
+        if lock.exists():
+            return lock
+    return None
+
+
 class Daemon:
     def __init__(self, download_dir: str, port: int = 9091):
         self.download_dir = download_dir
@@ -67,6 +97,10 @@ class Daemon:
         binary = find_daemon()
         if binary is None:
             raise DependencyUnavailable("transmission-daemon not found")
+        if self._proc is not None and self._proc.poll() is None:
+            return
+        if port_in_use(self.port):
+            raise PortInUseError(self.port)
         Path(self.download_dir).mkdir(parents=True, exist_ok=True)
         try:
             self._proc = subprocess.Popen(
@@ -77,6 +111,14 @@ class Daemon:
         except OSError as e:
             raise TransmissionError(f"Failed to start transmission-daemon: {e}") from e
         time.sleep(1.0)
+        if self._proc.poll() is not None:
+            # daemon exited immediately; a stale lock is the common cause
+            lock = find_stale_lock()
+            if lock is not None:
+                raise StaleLockError(
+                    f"transmission-daemon exited at startup; stale lock at {lock}"
+                )
+            raise TransmissionError("transmission-daemon exited immediately at startup")
 
     def stop(self) -> None:
         if self._proc is not None:

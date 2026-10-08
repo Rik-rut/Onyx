@@ -769,12 +769,27 @@ async def series_check(series_id, cfg):
     rows = [r for r in db.list_monitored() if int(r["id"]) == int(series_id)]
     if not rows:
         print("No such series.", file=sys.stderr)
+        db.close()
         raise SystemExit(3)
-    tvm = TvmazeClient(cfg)
-    series = tvm.full_series(int(rows[0]["tmdb_id"]))
-    wanted = select_airing(series, db, lookahead_days=int(cfg.get("monitor_lookahead_days", 7)))
-    print(f"{len(wanted)} episode(s) due for {series.title}")
-    db.close()
+    row = rows[0]
+    try:
+        series = TvmazeClient(cfg).full_series(int(row["tmdb_id"]))
+    except TvmazeError as e:
+        print(f"TVMaze error: {e}", file=sys.stderr)
+        db.close()
+        raise SystemExit(4)
+    wanted = select_airing(
+        series, db, lookahead_days=int(cfg.get("monitor_lookahead_days", 7))
+    )
+    if not wanted:
+        print(f"No episodes due for {series.title}.")
+        db.close()
+        return
+    try:
+        n = await _enqueue_episodes(series, wanted, cfg, db)
+    finally:
+        db.close()
+    print(f"{n} episode torrent(s) queued for {series.title} ({len(wanted)} due).")
 
 
 def list_queue(cfg):

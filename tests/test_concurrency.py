@@ -49,3 +49,42 @@ def test_is_active_and_complete():
 def test_active_count_mixed():
     torrents = [t(DOWNLOAD, 0.3), t(STOPPED, 0.0), t(DOWNLOAD, 0.99), t(SEED, 1.0)]
     assert active_count(torrents) == 2
+
+
+def test_port_in_use_detects_listener():
+    import socket
+
+    from arr.transmission.process import port_in_use
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as srv:
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(1)
+        port = srv.getsockname()[1]
+        assert port_in_use(port) is True
+    # after close, port is free
+    assert port_in_use(port) is False
+
+
+def test_port_in_use_free_port():
+    from arr.transmission.process import port_in_use
+
+    assert port_in_use(1) is False
+
+
+def test_find_stale_lock_none_by_default(tmp_path, monkeypatch):
+    from arr.transmission import process
+
+    monkeypatch.setattr(process, "lock_file_paths", lambda: [tmp_path / "lock"])
+    assert process.find_stale_lock() is None
+
+
+def test_find_stale_lock_detects_existing(tmp_path, monkeypatch):
+    from arr.transmission import process
+
+    lock = tmp_path / "transmission-daemon" / "lock"
+    lock.parent.mkdir(parents=True)
+    lock.write_text("x")
+    monkeypatch.setattr(
+        process, "lock_file_paths", lambda: [lock, tmp_path / "other" / "lock"]
+    )
+    assert process.find_stale_lock() == lock
