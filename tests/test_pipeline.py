@@ -351,6 +351,37 @@ def test_resolve_content_rejects_shared_staging_root(tmp_path):
     ) == specific
 
 
+def test_cancel_unknown_exits_3(tmp_path):
+    import pytest
+
+    cfg = make_cfg(tmp_path)
+    with pytest.raises(SystemExit) as e:
+        asyncio.run(pipeline.cancel_download("nope", cfg))
+    assert e.value.code == 3
+
+
+def test_cancel_marks_skipped_when_daemon_unreachable(tmp_path, monkeypatch):
+    cfg = make_cfg(tmp_path)
+    db = pipeline._db(cfg)
+    db.add_download("c".ljust(40, "0"), media_type="movie", title="X", state="added")
+    db.close()
+
+    from arr.transmission.errors import DependencyUnavailable
+
+    class Rpc:
+        def __init__(self, *a, **k):
+            pass
+
+        async def remove(self, *a, **k):
+            raise DependencyUnavailable("down")
+
+    monkeypatch.setattr(pipeline, "_rpc", lambda c: Rpc())
+    asyncio.run(pipeline.cancel_download("c".ljust(40, "0"), cfg))
+    db = pipeline._db(cfg)
+    assert db.get_download("c".ljust(40, "0"))["state"] == "skipped"
+    db.close()
+
+
 def test_import_movie_record(tmp_path, monkeypatch):
     cfg = make_cfg(tmp_path)
     db = DB(tmp_path / "arr.db")

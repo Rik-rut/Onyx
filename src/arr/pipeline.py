@@ -28,7 +28,7 @@ from arr.series.orchestration import (
     resolve_scope,
 )
 from arr.subtitles.service import ensure_subtitles
-from arr.transmission.errors import DependencyUnavailable
+from arr.transmission.errors import DependencyUnavailable, RpcError
 from arr.transmission.process import (
     RpcClient,
     active_count,
@@ -833,14 +833,27 @@ def get_status(download_id, cfg):
 
 
 async def cancel_download(download_id, cfg, delete_data=False):
+    db = _db(cfg)
+    rec = db.get_download(download_id)
+    if not rec:
+        db.close()
+        print("Not found.", file=sys.stderr)
+        raise SystemExit(3)
+    rpc_error = None
     try:
         rpc = _rpc(cfg)
         await rpc.remove(download_id, delete_data=delete_data)
-    except DependencyUnavailable:
-        pass
-    db = _db(cfg)
+    except DependencyUnavailable as e:
+        rpc_error = str(e)
+    except RpcError as e:
+        # torrent already gone from the daemon; still mark it locally
+        rpc_error = str(e)
     db.set_download_state(download_id, "skipped")
     db.close()
+    if rpc_error:
+        print(f"Torrent removed locally; daemon said: {rpc_error}", file=sys.stderr)
+    else:
+        print(f"Cancelled {download_id}.")
 
 
 async def import_download(download_id, cfg, overwrite=False):

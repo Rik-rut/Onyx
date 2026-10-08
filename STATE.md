@@ -2,17 +2,16 @@
 
 Status: IN_PROGRESS
 
-Iteration: 29
+Iteration: 30
 
 Current Objective:
-Close two R2 gaps: the `--transmission-remote` override and the exit-code for an unreachable daemon.
+Harden `cancel <id>` (R6): correct exit code for unknown ids and tolerance when the daemon is unreachable.
 
 Completed:
-- (Iterations 17-29) No-API-key migration; real orchestration; EZTV title gate; `max_concurrent_downloads`; season-pack preference; `unmonitor_ended_series`; `series_check`; daemon stale-lock/port errors; R8 policy on `queue` + time-mode fix; filename sanitizer; completion-gated import; staging-root guard; YTS zero-result fix; per-episode subtitle filtering; complete config template.
-- (Iteration 30)
-  - Added the global `--transmission-remote <path>` CLI option (R2); it overrides `transmission_remote` in config for the session.
-  - Fixed exit-code mapping (R2/R9): an unreachable/refused daemon raised `RpcError` (exit 1); the connect failure now raises `DependencyUnavailable`, so download commands exit `4` with an actionable message.
-  - Added tests: `test_rpc_unreachable_raises_dependency_unavailable`, `test_rpc_401_raises_auth_error`; documented the option in README.
+- (Iterations 17-30) No-API-key migration; real orchestration; EZTV title gate; `max_concurrent_downloads`; season-pack preference; `unmonitor_ended_series`; `series_check`; daemon stale-lock/port errors; R8 policy on `queue` + time-mode fix; filename sanitizer; completion-gated import; staging-root guard; YTS zero-result fix; per-episode subtitle filtering; complete config template; `--transmission-remote` + exit-4 unreachable daemon.
+- (Iteration 31)
+  - `cancel_download` now exits `3` for an unknown id (previously silently exited 0) and tolerates both `DependencyUnavailable` and `RpcError` (torrent already gone) by marking the record `skipped` locally, printing which case occurred.
+  - Added `tests/test_pipeline.py`: `test_cancel_unknown_exits_3`, `test_cancel_marks_skipped_when_daemon_unreachable`.
 
 Current Work:
 Executing autonomous iteration.
@@ -27,4 +26,4 @@ Next Action:
 Human runs the E2E download smokes against a running transmission-daemon, then marks DoD 233-236 and sets Status: COMPLETE.
 
 Last Updated:
-2026-10-08T15:07:21.199158+00:00
+2026-10-08T15:09:08.902123+00:00
