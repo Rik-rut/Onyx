@@ -19,7 +19,7 @@ subtitles (Subscene, YIFY Subtitles) are scraped with `curl_cffi` browser impers
 Windows:
 
 ```bat
-run.bat                :: first run: uv sync, then `arr --help`
+run.bat                :: first run: uv sync, then launches interactive CLI
 run.bat search movie "Inception"
 run.bat download movie "Inception" --auto
 ```
@@ -28,6 +28,7 @@ Linux/macOS:
 
 ```sh
 chmod +x run.sh
+./run.sh               :: first run: uv sync, then launches interactive CLI
 ./run.sh --help
 ```
 
@@ -60,6 +61,7 @@ Key settings: `download_root`, `library_root`,
 ## Command reference
 
 ```
+arr interactive
 arr search movie <query> [--explain] [--json]
 arr search tv <query> [-s N] [-e N] [--explain] [--json]
 arr download movie <query> [--pick N | --auto] [--yes] [--no-wait] [--force]

@@ -7,7 +7,7 @@ from pathlib import Path
 
 from arr.config.settings import Config
 from arr.core.models import Episode, MediaType, QualityProfile, Query, Release, Series
-from arr.core.parsing import explain, rank
+from arr.core.parsing import Scored, explain, rank
 from arr.db import DB
 from arr.importer.layout import (
     find_episode_file,
@@ -94,6 +94,8 @@ def _print_hardlink_notice(cfg: Config, count: int = 1) -> None:
 
 __all__ = [
     "search",
+    "search_candidates",
+    "enqueue_release",
     "download_movie",
     "download_tv",
     "series_add",
@@ -112,14 +114,13 @@ __all__ = [
 ]
 
 
-async def search(
+async def search_candidates(
     media_type: MediaType,
     query: str,
     cfg: Config,
     season: int | None = None,
     episode: int | None = None,
-    explain_mode: bool = False,
-) -> list[Release]:
+) -> tuple[list[Release], list[Scored], Query]:
     q = Query(media_type=media_type, text=query, season=season, episode=episode)
     # Metadata resolve (best effort)
     try:
@@ -153,9 +154,24 @@ async def search(
         min_seeders=int(cfg.get("min_seeders", 1)),
     )
     scored = rank(releases, q, profile, cfg.values)
+    accepted = [s.release for s in scored if s.rejected is None]
+    return accepted, scored, q
+
+
+async def search(
+    media_type: MediaType,
+    query: str,
+    cfg: Config,
+    season: int | None = None,
+    episode: int | None = None,
+    explain_mode: bool = False,
+) -> list[Release]:
+    accepted, scored, _ = await search_candidates(
+        media_type, query, cfg, season=season, episode=episode
+    )
     if explain_mode:
         print(explain(scored), file=sys.stderr)
-    return [s.release for s in scored if s.rejected is None]
+    return accepted
 
 
 def _pick(results: list[Release], auto: bool, pick: int | None) -> Release | None:
@@ -542,6 +558,71 @@ async def _promote_queued(cfg: Config, db: DB) -> None:
                 "downloading",
             )
         active += 1
+
+
+async def enqueue_release(
+    chosen: Release,
+    cfg: Config,
+    *,
+    media_type: str = "movie",
+    season: int | None = None,
+    episode: int | None = None,
+    tmdb_id: int | None = None,
+    imdb_id: str | None = None,
+    force: bool = False,
+) -> tuple[bool, str]:
+    """Enqueue a single release into Transmission and the local database.
+
+    Respects max_concurrent_downloads: if all slots are full, adds paused (queued).
+    Returns (success, message).
+    """
+    db = _db(cfg)
+    try:
+        existing = db.get_download(chosen.infohash)
+        if existing and not force:
+            return False, f"Already known (state={existing['state']}); use --force to re-add."
+        staging = _staging_dir(cfg, media_type)
+        rpc = _rpc(cfg)
+        limit = int(cfg.get("max_concurrent_downloads", 3))
+        paused = False
+        try:
+            torrents = await rpc.list_torrents()
+            active = active_count(torrents)
+            paused = plan_slots(active, limit, 1)[0]
+        except DependencyUnavailable as e:
+            return False, f"Transmission unavailable: {e}"
+        except Exception:
+            paused = False
+
+        try:
+            await rpc.add_magnet(chosen.magnet, str(staging), paused=paused)
+        except DependencyUnavailable as e:
+            return False, f"Transmission unavailable: {e}"
+        except Exception as e:
+            return False, f"Failed to add magnet: {e}"
+
+        db.add_download(
+            chosen.infohash,
+            media_type=media_type,
+            tmdb_id=tmdb_id or chosen.tmdb_id,
+            imdb_id=imdb_id or chosen.imdb_id,
+            title=chosen.title,
+            year=chosen.year,
+            season=season if season is not None else chosen.season,
+            episode=episode if episode is not None else chosen.episode,
+            indexer=chosen.indexer,
+            download_dir=str(staging),
+            state="queued" if paused else "added",
+        )
+        if not paused:
+            try:
+                await _promote_queued(cfg, db)
+            except Exception:
+                pass
+        msg = "Queued (download limit reached)" if paused else "Started downloading"
+        return True, msg
+    finally:
+        db.close()
 
 
 async def _fan_out(q: Query, cfg: Config) -> list[Release]:

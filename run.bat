@@ -52,18 +52,18 @@ if errorlevel 1 (
     exit /b 1
 )
 
-REM No arguments (typical Explorer double-click): show help and keep the window
-REM open so the output is readable.
+REM No arguments (e.g. Explorer double-click or terminal without flags):
+REM Launch the interactive terminal application (R14).
 if "%~1"=="" (
-    echo.
-    "%UV%" run arr --help
-    echo.
-    echo [arr] Provide arguments, e.g.:
-    echo   run.bat search movie "Inception"
-    echo   run.bat download movie "Inception" --auto
-    pause
+    "%UV%" run arr interactive
+    set "rc=!errorlevel!"
     popd
-    exit /b 0
+    if not "!rc!"=="0" (
+        echo.
+        echo [arr] arr exited with code !rc!.
+        pause
+    )
+    exit /b !rc!
 )
 
 "%UV%" run arr %*

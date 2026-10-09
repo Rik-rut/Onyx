@@ -18,3 +18,7 @@ downloads/
 
 # Environment variables
 .env
+
+# Graphify
+.graphify/
+*graphify-out/

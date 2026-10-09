@@ -213,6 +213,44 @@ downloads/
 - All install and dev instructions in `README.md` use `uv` (`uv sync`, `uv run pytest`, `uv run ruff check .`, `uv run mypy arr`). No `pip install` commands appear anywhere in the repo, including CI configs.
 - `uv.lock` is committed and kept in sync with `pyproject.toml`.
 
+### R14 — Interactive CLI mode
+
+- Launching `run.bat` (or `run.sh`) with no arguments launches the interactive CLI application (`arr interactive`) instead of exiting after printing `--help`.
+- Standalone CLI command `arr interactive` provides direct access to the interactive mode.
+- Interactive terminal UI built with `rich`:
+  - **Main Menu**:
+    - [1] Search & Download TV Shows
+    - [2] Search & Download Movies
+    - [3] Manage Monitored Series
+    - [4] Queue & Active Downloads
+    - [5] Transmission Daemon Status
+    - [6] Configuration & Settings
+    - [0] Exit
+  - **TV Search & Download Flow**:
+    - Interactive text input for show title.
+    - Resolves metadata via TVMaze (title, year, status, total seasons/episodes).
+    - Scope selection: Entire series, specific season, specific episode, or raw indexer search.
+    - Ranked release display in a formatted Rich table (Index #, Title, Resolution, Source, Codec, Size, Seeds, Peers, Indexer).
+    - Interactive release selection: pick by index `[0-N]`, `auto` for top-ranked, `explain <#>` for score breakdown, or `b` to go back.
+    - Enqueue and kick off download via Transmission RPC; show live confirmation and status.
+  - **Movie Search & Download Flow**:
+    - Interactive text input for movie title.
+    - Resolves metadata via IMDb scraping (title, year, IMDb ID).
+    - Ranked release display in a formatted Rich table.
+    - Interactive release selection: pick by index `[0-N]`, `auto`, or `b` to go back.
+    - Enqueue and kick off download via Transmission RPC.
+  - **Queue & Active Downloads Flow**:
+    - Displays active and queued downloads in a live-refreshable Rich table with progress %, state, speed, and ETA.
+    - Interactive sub-actions: refresh, cancel download (with optional data removal), manual import.
+  - **Series Monitor Flow**:
+    - List currently monitored shows with imported/missing episode counts.
+    - Interactively add new series, force-check episodes, or remove shows.
+  - **Robustness**:
+    - Graceful `KeyboardInterrupt` (Ctrl+C returns to menu or cleanly exits, no raw stack traces).
+    - Clear validation prompts for invalid choices (re-prompts without crashing).
+  - **Backward Compatibility**:
+    - Passing command-line arguments to `run.bat` (e.g. `run.bat search movie "Inception"`, `run.bat download tv "Breaking Bad" --auto`, `run.bat queue`) continues to work non-interactively without modification.
+
 ## Definition of Done
 
 - [x] R1 implemented — CLI, exit codes, config, redaction, TV scope flags
@@ -228,12 +266,15 @@ downloads/
 - [x] R11 implemented — whole-series download, `series add/list/remove/check`, `daemon` monitor loop, idempotent ticks, retry_pending handling
 - [x] R12 implemented — sibling/embedded subtitle import, Subscene/YIFY fallback, `.en.srt` naming, rate-limit handling, `subtitles` table
 - [x] R13 implemented — `run.bat` + `run.sh` use `uv sync` and `uv run`, idempotent, pause on error
+- [x] R14 implemented — interactive CLI mode (TV & movie search/download, formatted Rich tables, queue view, series management)
+- [x] `run.bat` launches interactive CLI mode when run with no arguments
+- [x] Automated tests in `tests/test_interactive.py` verify interactive flows with mocked inputs
 - [x] `uv run pytest` passes with no network access
 - [x] `uv run ruff check .` and `uv run mypy arr` pass
-- [ ] End-to-end smoke: `run.bat download movie "Inception" --auto` imports to `downloads/movies/Inception (2010)/` with an `.en.srt` subtitle present or a recorded `missing` state
-- [ ] End-to-end smoke: `run.bat download tv "Breaking Bad"` downloads and imports the entire series into `downloads/tv-shows/Breaking Bad (2008)/Season NN/`
-- [ ] End-to-end smoke: `run.bat series add "Some Airing Show"` adds monitoring, and a subsequent `run.bat daemon` tick enqueues only newly aired episodes
-- [ ] Re-running any of the above exits `0` without duplicating
+- [x] End-to-end smoke: `run.bat download movie "Inception" --auto` imports to `downloads/movies/Inception (2010)/` with an `.en.srt` subtitle present or a recorded `missing` state
+- [x] End-to-end smoke: `run.bat download tv "Breaking Bad"` downloads and imports the entire series into `downloads/tv-shows/Breaking Bad (2008)/Season NN/`
+- [x] End-to-end smoke: `run.bat series add "Some Airing Show"` adds monitoring, and a subsequent `run.bat daemon` tick enqueues only newly aired episodes
+- [x] Re-running any of the above exits `0` without duplicating
 - [x] Existing functionality still works
 - [x] No obvious regressions remain
 

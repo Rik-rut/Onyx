@@ -16,7 +16,7 @@ uv python find 3.11 >/dev/null 2>&1 || echo "No Python 3.11 found; uv will fetch
 uv sync || { rc=$?; echo "uv sync failed with exit code $rc."; exit $rc; }
 
 if [ "$#" -eq 0 ]; then
-    uv run arr --help
+    uv run arr interactive
 else
     uv run arr "$@"
 fi

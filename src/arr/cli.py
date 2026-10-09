@@ -13,7 +13,7 @@ from arr.core.models import MediaType
 from arr.exit import ExitCode
 from arr.log import configure_logging, get_logger
 
-app = typer.Typer(no_args_is_help=True, add_completion=False)
+app = typer.Typer(no_args_is_help=False, add_completion=False)
 search_app = typer.Typer(no_args_is_help=True)
 download_app = typer.Typer(no_args_is_help=True)
 series_app = typer.Typer(no_args_is_help=True)
@@ -47,7 +47,19 @@ def _config(ctx: typer.Context):
     return cfg
 
 
-@app.callback()
+@app.command("interactive")
+def interactive_cmd(ctx: typer.Context) -> None:
+    """Launch the interactive terminal application."""
+    from arr.interactive import run_interactive
+
+    cfg = _config(ctx)
+    try:
+        run_interactive(cfg)
+    except KeyboardInterrupt:
+        typer.echo("\nGoodbye!")
+
+
+@app.callback(invoke_without_command=True)
 def main(
     ctx: typer.Context,
     config: str | None = typer.Option(None, "--config", help="Path to config.toml"),
@@ -59,6 +71,8 @@ def main(
         "config_path": Path(config) if config else None,
         "transmission_remote": transmission_remote,
     }
+    if ctx.invoked_subcommand is None:
+        interactive_cmd(ctx)
 
 
 @search_app.command("movie")

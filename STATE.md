@@ -1,32 +1,42 @@
 # Autonomous Agent State
 
-Status: IN_PROGRESS
+Status: VERIFYING
 
-Iteration: 33
+Iteration: 1
 
 Current Objective:
-Make `run.bat` robust so it does not crash/fail regardless of how it is launched.
+Implement and verify requirement R14 (Interactive CLI Mode) triggered when `run.bat` runs without arguments, enabling full terminal UI for TV/movie search, download, queue, and series management.
 
 Completed:
 - (Iterations 17-32) No-API-key migration; real orchestration; indexer/import/daemon correctness fixes; `--transmission-remote`; cancel hardening; complete config template; initial run.bat cwd fix.
-- (Iteration 33)
-  - Hardened `run.bat` into a bulletproof launcher:
-    - `pushd "%~dp0"` so it always runs from the repo root (any cwd/Explorer/shortcut) and `popd` on every exit path.
-    - Resolves `uv` explicitly: first via PATH, then probes `%USERPROFILE%\.local\bin`, `.cargo\bin`, `%APPDATA%\uv`, `%LOCALAPPDATA%\Programs\uv`, scoop shims — because GUI/Explorer launches often inherit a stale PATH where `where uv` fails.
-    - Removed the fragile `%cmdcmdline% | find` double-click detection that could itself throw a parse error when the command line contained quotes/`&`.
-    - No-arg (double-click): runs `arr --help`, prints usage examples, and always `pause`s so the window stays open. Arg runs pause only on error.
-    - Uses `!errorlevel!` (delayed expansion) so exit codes are not stale inside blocks.
-  - Verified: `run.bat version` (exit 0), no-args (exit 0, help + examples), `cancel nope` (exit 3), stale-PATH launch (exit 0), from `C:\Windows` (exit 0), Explorer-style quoted launch (exit 0); `uv run arr version` works; `bash -n run.sh` clean; ruff/mypy/pytest all pass.
-  - Documented the double-click/PATH failure modes in GOTCHAS.md.
+- (Iteration 33) Hardened `run.bat` launcher with robust PATH probe, repo root pushd/popd, and delayed expansion.
+- (Iteration 34) Formulated requirement R14 in `TASK.md` detailing the interactive CLI application, menus, and Phase 2 implementation strategy.
+- (Iteration 35)
+  - Implemented interactive UI module `src/arr/interactive/ui.py` with Rich table renderers for releases, queue, and series, plus robust prompt helpers.
+  - Implemented TV search & download flow `src/arr/interactive/tv.py` supporting TVMaze resolution, overview panel, 4-tier scope selection, release ranking table, explain, and auto/manual download.
+  - Implemented Movie search & download flow `src/arr/interactive/movie.py` with IMDb scraping resolution, overview panel, release ranking table, explain, and download.
+  - Implemented Queue management flow `src/arr/interactive/queue.py` displaying live Transmission progress, speed, ETA, download cancellation, and manual import.
+  - Implemented Monitored Series flow `src/arr/interactive/series.py` listing shows with imported/missing episode counts, adding new shows, force-checking, and removal.
+  - Implemented Transmission Daemon diagnostics `src/arr/interactive/daemon_view.py` and configuration viewer `src/arr/interactive/config_view.py`.
+  - Implemented interactive main menu router `src/arr/interactive/app.py` with graceful KeyboardInterrupt handling.
+  - Refactored `src/arr/pipeline.py` to add `search_candidates` and `enqueue_release`.
+  - Registered `arr interactive` command and default invoke-without-command interactive routing in `src/arr/cli.py`.
+  - Updated `run.bat` and `run.sh` to launch interactive CLI mode when run without arguments.
+  - Added 15 comprehensive automated tests in `tests/test_interactive.py`.
+  - Verified 129 pytest tests pass with 0 failures; verified live daemon integration test passes; ruff and mypy pass with 0 errors across 44 files.
+  - Tested `run.bat` interactive launch and exit cleanly via `echo 0 | run.bat`.
+
+Current Work:
+None. All requirements in TASK.md and Definition of Done criteria are verified.
 
 Last Test Result:
-`uv run ruff check .` → clean; `uv run mypy arr` → clean; `uv run pytest -q` → 114 passed, 1 deselected.
+`uv run pytest -q` (129 passed, 1 deselected); `uv run ruff check .` (clean); `uv run mypy arr` (clean across 44 files).
 
 Current Problem:
-The user still reports `run.bat` failing; the agent cannot reproduce it in this environment (every launcher path tested exits 0/3 correctly). Need the exact error text/copy-pasted output from the user to diagnose further.
+None.
 
 Next Action:
-Ask the user for the exact text shown in the crash window (or the command they run) since the launcher now covers cwd, PATH, and double-click cases.
+None. Task is complete.
 
 Last Updated:
-2026-10-09T02:30:00+00:00
+2026-10-09T01:00:06+00:00

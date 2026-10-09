@@ -1,35 +1,499 @@
 #!/usr/bin/env python3
-"""Autonomous OpenCode Agent Controller.
+"""Autonomous Coding-Agent Controller for Antigravity CLI (agy).
 
-Orchestrates autonomous software engineering iterations using OpenCode:
-PLAN -> IMPLEMENT -> TEST -> DEBUG -> REVIEW -> VERIFY -> COMPLETE
+Workflow:
+PLAN -> IMPLEMENT -> TEST -> DEBUG -> REVIEW -> VERIFY -> REPEAT -> COMPLETE
+
+The controller handles orchestration, safety limits, logging, verification,
+stuck detection, and recovery. Antigravity handles software engineering tasks.
 """
 
+from __future__ import annotations
+
 import argparse
-import datetime
-import difflib
+from dataclasses import dataclass
+from datetime import datetime, timezone
+import hashlib
 import json
 import os
+from pathlib import Path
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import time
-import urllib.request
-import urllib.error
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
-# Default Configuration Constants
+
+# =====================================================================
+# Configuration Defaults
+# =====================================================================
 DEFAULT_MAX_ITERATIONS = 30
-DEFAULT_MAX_RUNTIME_SECONDS = 4 * 60 * 60  # 14400 seconds (4 hours)
+DEFAULT_MAX_RUNTIME_SECONDS = 14400  # 4 hours
 DEFAULT_MAX_STUCK_ITERATIONS = 3
-DEFAULT_TEST_TIMEOUT_SECONDS = 30 * 60     # 1800 seconds (30 minutes)
+DEFAULT_TEST_TIMEOUT_SECONDS = 1800  # 30 minutes
+DEFAULT_ANTIGRAVITY_CMD = "agy"
 
-PROMPT_AUTONOMOUS_ITERATION = """You are operating inside an autonomous development loop.
+STATUS_NOT_STARTED = "NOT_STARTED"
+STATUS_IN_PROGRESS = "IN_PROGRESS"
+STATUS_VERIFYING = "VERIFYING"
+STATUS_BLOCKED = "BLOCKED"
+STATUS_COMPLETE = "COMPLETE"
+STATUS_FAILED = "FAILED"
+
+VALID_STATUSES = {
+    STATUS_NOT_STARTED,
+    STATUS_IN_PROGRESS,
+    STATUS_VERIFYING,
+    STATUS_BLOCKED,
+    STATUS_COMPLETE,
+    STATUS_FAILED,
+}
+
+
+# =====================================================================
+# Configuration & Environment
+# =====================================================================
+@dataclass
+class Config:
+    repo_root: Path
+    antigravity_command: str = DEFAULT_ANTIGRAVITY_CMD
+    max_iterations: int = DEFAULT_MAX_ITERATIONS
+    max_runtime_seconds: int = DEFAULT_MAX_RUNTIME_SECONDS
+    max_stuck_iterations: int = DEFAULT_MAX_STUCK_ITERATIONS
+    test_timeout_seconds: int = DEFAULT_TEST_TIMEOUT_SECONDS
+    dry_run: bool = False
+    status_only: bool = False
+    resume: bool = False
+    use_session: bool = True
+    skip_permissions: bool = True
+    git_checkpoints: bool = True
+    custom_verify_cmd: Optional[str] = None
+    task_file: Path = Path("TASK.md")
+    plan_file: Path = Path("PLAN.md")
+    state_file: Path = Path("STATE.md")
+    agents_file: Path = Path("AGENTS.md")
+    logs_dir: Path = Path("logs")
+
+    @classmethod
+    def load(cls, repo_root: Path, args: Optional[argparse.Namespace] = None) -> "Config":
+        env_path = repo_root / ".env"
+        file_env: Dict[str, str] = {}
+        if env_path.is_file():
+            try:
+                for line in env_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    if "=" in line:
+                        k, v = line.split("=", 1)
+                        file_env[k.strip()] = v.strip().strip("'\"")
+            except Exception:
+                pass
+
+        def get_val(key: str, default: Any) -> Any:
+            # Precedence: CLI args > Environment variable > .env file > Default
+            cli_val = None
+            if args is not None:
+                cli_val = getattr(args, key.lower(), None)
+            if cli_val is not None:
+                return cli_val
+
+            env_val = os.environ.get(key, file_env.get(key))
+            if env_val is not None:
+                if isinstance(default, int):
+                    try:
+                        return int(env_val)
+                    except ValueError:
+                        return default
+                if isinstance(default, bool):
+                    return env_val.lower() in ("true", "1", "yes", "y")
+                return env_val
+            return default
+
+        cmd = get_val("ANTIGRAVITY_COMMAND", DEFAULT_ANTIGRAVITY_CMD)
+        max_iter = int(get_val("MAX_ITERATIONS", DEFAULT_MAX_ITERATIONS))
+        max_run = int(get_val("MAX_RUNTIME_SECONDS", DEFAULT_MAX_RUNTIME_SECONDS))
+        max_stuck = int(get_val("MAX_STUCK_ITERATIONS", DEFAULT_MAX_STUCK_ITERATIONS))
+        test_to = int(get_val("TEST_TIMEOUT_SECONDS", DEFAULT_TEST_TIMEOUT_SECONDS))
+        use_session = bool(get_val("USE_SESSION_CONTINUATION", True))
+        custom_verify = os.environ.get("VERIFICATION_COMMAND", file_env.get("VERIFICATION_COMMAND"))
+        if args and getattr(args, "verify_cmd", None):
+            custom_verify = args.verify_cmd
+
+        return cls(
+            repo_root=repo_root,
+            antigravity_command=cmd,
+            max_iterations=max_iter,
+            max_runtime_seconds=max_run,
+            max_stuck_iterations=max_stuck,
+            test_timeout_seconds=test_to,
+            dry_run=bool(args.dry_run) if args else False,
+            status_only=bool(args.status) if args else False,
+            resume=bool(args.resume) if args else False,
+            use_session=use_session,
+            custom_verify_cmd=custom_verify,
+            task_file=repo_root / "TASK.md",
+            plan_file=repo_root / "PLAN.md",
+            state_file=repo_root / "STATE.md",
+            agents_file=repo_root / "AGENTS.md",
+            logs_dir=repo_root / "logs",
+        )
+
+
+# =====================================================================
+# Redaction & Safety
+# =====================================================================
+KEY_VALUE_PATTERN = re.compile(
+    r"(?i)\b(api[-_]?key|access[-_]?token|secret[-_]?key|auth[-_]?token|password)\s*([:=])\s*['\"]?([A-Za-z0-9_\-\.]{8,})['\"]?"
+)
+BEARER_PATTERN = re.compile(r"(?i)\b(bearer\s+)([A-Za-z0-9_\-\.]{12,})")
+BARE_TOKEN_PATTERN = re.compile(r"\b(ghp_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9]{20,}|AIza[0-9A-Za-z-_]{35})\b")
+
+
+def redact_secrets(text: str) -> str:
+    """Redact sensitive tokens, passwords, and keys from logs and console."""
+    if not text:
+        return ""
+    result = KEY_VALUE_PATTERN.sub(r"\1\2[REDACTED]", text)
+    result = BEARER_PATTERN.sub(r"\1[REDACTED]", result)
+    result = BARE_TOKEN_PATTERN.sub(r"[REDACTED]", result)
+    return result
+
+
+# =====================================================================
+# State & Task Management
+# =====================================================================
+@dataclass
+class AgentState:
+    status: str
+    iteration: int
+    current_objective: str
+    completed: str
+    current_work: str
+    last_test_result: str
+    current_problem: str
+    next_action: str
+    last_updated: str
+
+    @classmethod
+    def load(cls, state_path: Path) -> "AgentState":
+        if not state_path.is_file():
+            return cls(
+                status=STATUS_NOT_STARTED,
+                iteration=0,
+                current_objective="Read TASK.md and begin implementation.",
+                completed="- Nothing yet.",
+                current_work="None.",
+                last_test_result="Not run.",
+                current_problem="None.",
+                next_action="Inspect the repository.",
+                last_updated="Not set.",
+            )
+
+        content = state_path.read_text(encoding="utf-8", errors="ignore")
+        return cls.parse(content)
+
+    @classmethod
+    def parse(cls, content: str) -> "AgentState":
+        def extract_field(label: str, default: str = "") -> str:
+            pattern = re.compile(rf"^{label}\s*:\s*(.*?)(?=\n[A-Z][A-Za-z0-9 ]+\s*:|\Z)", re.MULTILINE | re.DOTALL)
+            m = pattern.search(content)
+            if m:
+                return m.group(1).strip()
+            return default
+
+        # Extract status
+        status_match = re.search(r"(?i)^status\s*:\s*([A-Za-z_]+)", content, re.MULTILINE)
+        raw_status = status_match.group(1).upper() if status_match else STATUS_NOT_STARTED
+        status = raw_status if raw_status in VALID_STATUSES else STATUS_IN_PROGRESS
+
+        # Extract iteration
+        iter_match = re.search(r"(?i)^iteration\s*:\s*(\d+)", content, re.MULTILINE)
+        iteration = int(iter_match.group(1)) if iter_match else 0
+
+        obj = extract_field("Current Objective", "Read TASK.md and begin implementation.")
+        comp = extract_field("Completed", "- Nothing yet.")
+        work = extract_field("Current Work", "None.")
+        tests = extract_field("Last Test Result", "Not run.")
+        prob = extract_field("Current Problem", "None.")
+        action = extract_field("Next Action", "Inspect the repository.")
+        updated = extract_field("Last Updated", "Not set.")
+
+        return cls(
+            status=status,
+            iteration=iteration,
+            current_objective=obj,
+            completed=comp,
+            current_work=work,
+            last_test_result=tests,
+            current_problem=prob,
+            next_action=action,
+            last_updated=updated,
+        )
+
+    def save(self, state_path: Path) -> None:
+        self.last_updated = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        text = f"""# Autonomous Agent State
+
+Status: {self.status}
+
+Iteration: {self.iteration}
+
+Current Objective:
+{self.current_objective}
+
+Completed:
+{self.completed}
+
+Current Work:
+{self.current_work}
+
+Last Test Result:
+{self.last_test_result}
+
+Current Problem:
+{self.current_problem}
+
+Next Action:
+{self.next_action}
+
+Last Updated:
+{self.last_updated}
+"""
+        state_path.write_text(text, encoding="utf-8")
+
+
+class TaskChecker:
+    @staticmethod
+    def inspect(task_path: Path) -> Tuple[bool, List[str], List[str]]:
+        """Inspect TASK.md and return (has_requirements, checked_dod, unchecked_dod)."""
+        if not task_path.is_file():
+            return False, [], []
+
+        content = task_path.read_text(encoding="utf-8", errors="ignore")
+        checked: List[str] = []
+        unchecked: List[str] = []
+
+        in_dod = False
+        for line in content.splitlines():
+            line_str = line.strip()
+            if line_str.lower().startswith("## definition of done"):
+                in_dod = True
+                continue
+            if in_dod and line_str.startswith("## "):
+                in_dod = False
+                continue
+
+            if in_dod:
+                if re.match(r"^-\s*\[[xX]\]\s+", line_str):
+                    item = re.sub(r"^-\s*\[[xX]\]\s+", "", line_str)
+                    checked.append(item)
+                elif re.match(r"^-\s*\[\s*\]\s+", line_str):
+                    item = re.sub(r"^-\s*\[\s*\]\s+", "", line_str)
+                    unchecked.append(item)
+
+        has_requirements = bool(checked or unchecked)
+        return has_requirements, checked, unchecked
+
+
+# =====================================================================
+# Verification Detector & Runner
+# =====================================================================
+class VerificationRunner:
+    def __init__(self, config: Config):
+        self.config = config
+
+    def detect_command(self) -> Optional[str]:
+        if self.config.custom_verify_cmd:
+            return self.config.custom_verify_cmd
+
+        root = self.config.repo_root
+
+        # Python projects
+        if (root / "uv.lock").is_file():
+            return "uv run pytest"
+        if (root / "pyproject.toml").is_file():
+            # Check if pytest is mentioned or tests exist
+            pyproject = (root / "pyproject.toml").read_text(encoding="utf-8", errors="ignore")
+            if "pytest" in pyproject or (root / "tests").is_dir():
+                return "python -m pytest"
+        if (root / "requirements.txt").is_file() and ((root / "tests").is_dir() or list(root.glob("test_*.py"))):
+            return "python -m pytest"
+
+        # Node / JS / TS projects
+        pkg_json = root / "package.json"
+        if pkg_json.is_file():
+            try:
+                data = json.loads(pkg_json.read_text(encoding="utf-8", errors="ignore"))
+                scripts = data.get("scripts", {})
+                has_test = "test" in scripts and "no test specified" not in scripts.get("test", "")
+                has_build = "build" in scripts
+
+                if (root / "pnpm-lock.yaml").is_file():
+                    if has_test:
+                        return "pnpm test"
+                    if has_build:
+                        return "pnpm build"
+                if (root / "yarn.lock").is_file():
+                    if has_test:
+                        return "yarn test"
+                    if has_build:
+                        return "yarn build"
+                if has_test:
+                    return "npm test"
+                if has_build:
+                    return "npm run build"
+            except Exception:
+                pass
+
+        # Rust
+        if (root / "Cargo.toml").is_file():
+            return "cargo test"
+
+        # Go
+        if (root / "go.mod").is_file():
+            return "go test ./..."
+
+        # Python unittest fallback if test files or tests folder exist
+        if (root / "tests").is_dir() or list(root.glob("test_*.py")):
+            return "python -m unittest discover"
+
+        return None
+
+    def run(self, command: str) -> Tuple[int, str, float]:
+        """Execute verification command with timeout and return (exit_code, output, duration)."""
+        start_time = time.time()
+        try:
+            res = subprocess.run(
+                command,
+                shell=True,
+                cwd=str(self.config.repo_root),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=self.config.test_timeout_seconds,
+            )
+            duration = time.time() - start_time
+            return res.returncode, redact_secrets(res.stdout), duration
+        except subprocess.TimeoutExpired as e:
+            duration = time.time() - start_time
+            out = f"Verification command timed out after {self.config.test_timeout_seconds}s.\nPartial output:\n"
+            out += (e.stdout or "") if isinstance(e.stdout, str) else ""
+            return -1, redact_secrets(out), duration
+        except Exception as e:
+            duration = time.time() - start_time
+            return -1, f"Failed to execute verification command '{command}': {e}", duration
+
+
+# =====================================================================
+# Git Safety & Checkpointing
+# =====================================================================
+class GitManager:
+    def __init__(self, repo_root: Path):
+        self.repo_root = repo_root
+        self.is_git = self._check_is_git()
+
+    def _check_is_git(self) -> bool:
+        if not (self.repo_root / ".git").is_dir():
+            return False
+        try:
+            res = subprocess.run(
+                ["git", "rev-parse", "--is-inside-work-tree"],
+                cwd=str(self.repo_root),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            return res.returncode == 0 and res.stdout.strip() == "true"
+        except Exception:
+            return False
+
+    def status_short(self) -> str:
+        if not self.is_git:
+            return "Not a git repository."
+        try:
+            res = subprocess.run(
+                ["git", "status", "--short"],
+                cwd=str(self.repo_root),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            return res.stdout.strip()
+        except Exception as e:
+            return f"git status error: {e}"
+
+    def create_checkpoint(self, iteration: int, message: str) -> bool:
+        """Create a safe checkpoint commit without using destructive commands."""
+        if not self.is_git:
+            return False
+        try:
+            status = self.status_short()
+            if not status:
+                return False  # No changes to checkpoint
+
+            # Stage modified and new files, excluding sensitive/log files
+            # Note: We do NOT use git clean or git reset --hard!
+            subprocess.run(["git", "add", "."], cwd=str(self.repo_root), check=True)
+            commit_msg = f"[autonomous checkpoint] Iteration {iteration}: {message}"
+            res = subprocess.run(
+                ["git", "commit", "-m", commit_msg],
+                cwd=str(self.repo_root),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            return res.returncode == 0
+        except Exception:
+            return False
+
+
+# =====================================================================
+# Snapshot & Stuck Detection
+# =====================================================================
+class RepoSnapshot:
+    @staticmethod
+    def capture(repo_root: Path, git_mgr: GitManager) -> Dict[str, Any]:
+        """Capture signature of repo state to detect lack of progress."""
+        state_file = repo_root / "STATE.md"
+        plan_file = repo_root / "PLAN.md"
+
+        state_content = state_file.read_text(encoding="utf-8", errors="ignore") if state_file.is_file() else ""
+        plan_content = plan_file.read_text(encoding="utf-8", errors="ignore") if plan_file.is_file() else ""
+
+        # Collect hashes of tracked/modified files excluding logs and .git
+        file_signatures: Dict[str, float] = {}
+        for p in repo_root.rglob("*"):
+            if p.is_file():
+                rel = p.relative_to(repo_root)
+                parts = rel.parts
+                if ".git" in parts or "logs" in parts or "__pycache__" in parts:
+                    continue
+                try:
+                    file_signatures[str(rel)] = p.stat().st_mtime
+                except Exception:
+                    pass
+
+        return {
+            "git_status": git_mgr.status_short() if git_mgr.is_git else "",
+            "file_count": len(file_signatures),
+            "files": file_signatures,
+            "state_hash": hashlib.sha256(state_content.encode("utf-8")).hexdigest(),
+            "plan_hash": hashlib.sha256(plan_content.encode("utf-8")).hexdigest(),
+        }
+
+
+# =====================================================================
+# Prompts
+# =====================================================================
+STANDARD_AUTONOMOUS_PROMPT = """You are operating inside an autonomous software-development loop.
 
 Read:
+
 - TASK.md
 - AGENTS.md
 - PLAN.md
@@ -44,30 +508,34 @@ Do not merely explain what should be done.
 For this iteration:
 
 1. inspect the current repository state
-2. determine the next unfinished requirement
+2. identify the next unfinished requirement
 3. implement the next useful change
-4. run appropriate tests/verification
+4. run appropriate tests or verification
 5. diagnose and fix failures
-6. update PLAN.md if the implementation plan changes
+6. update PLAN.md if needed
 7. update STATE.md
 
 Do not repeat a failed approach without investigating why it failed.
 
-If the task is not complete, leave the repository in a usable state and record the next action.
+If the task is not complete:
+- leave the repository in a usable state
+- document what was completed
+- document the current problem
+- document the next action
 
-If all requirements are genuinely satisfied:
-- verify them
+If everything is genuinely complete:
+- verify every Definition of Done item
 - update STATE.md
 - set:
 
 STATUS: COMPLETE
 """
 
-PROMPT_FAILURE_RECOVERY = """Automated verification failed.
+RECOVERY_VERIFICATION_PROMPT_TEMPLATE = """Automated verification failed.
 
-Do not merely explain the failure.
+Do not merely explain the error.
 
-Inspect the repository and fix the underlying cause.
+Inspect the repository and fix the underlying problem.
 
 Failure output:
 
@@ -81,13 +549,13 @@ After fixing:
 4. continue toward the remaining requirements
 """
 
-PROMPT_STUCK_RECOVERY = """The autonomous loop appears stuck.
+STUCK_RECOVERY_PROMPT = """The autonomous loop appears stuck.
 
 Recent iterations have not produced meaningful progress.
 
 Do not repeat the same approach.
 
-Re-read TASK.md, STATE.md, and the actual failure logs.
+Re-read TASK.md, STATE.md, and the actual logs/errors.
 
 Re-evaluate the architecture.
 
@@ -96,1564 +564,475 @@ Choose a materially different approach where appropriate.
 Make concrete changes and verify them.
 """
 
-ORCHESTRATOR_SYSTEM_PROMPT = """You are the independent engineering orchestrator/reviewer. Review every iteration against the task requirements, scope, changed code, and verification evidence. Do not edit code. Return ONLY a JSON object with exactly these fields: verdict (one of on_track, needs_correction, complete), summary (concise evidence-based reason), instructions (the next focused action; for complete use an empty string). Choose complete only when every task requirement is demonstrably satisfied and verification passes. Choose needs_correction for scope drift, incorrect/incomplete work, failed verification, or unsupported completion claims. Otherwise choose on_track and direct the next focused increment. Never treat STATE.md claims alone as proof; inspect the diff and test evidence."""
+INCOMPLETE_DOD_PROMPT_TEMPLATE = """The task was reported as complete, but Definition of Done items in TASK.md remain unchecked or unverified:
 
-DEFAULT_TASK_TEMPLATE = """# Autonomous Task
+{unchecked_items}
 
-## Objective
-
-Describe the desired end result.
-
-## Requirements
-
-- Requirement 1
-- Requirement 2
-- Requirement 3
-
-## Definition of Done
-
-- [ ] Requirement 1 implemented
-- [ ] Requirement 2 implemented
-- [ ] Requirement 3 implemented
-- [ ] Relevant tests pass
-- [ ] Existing functionality still works
-- [ ] No obvious regressions remain
-
-## Constraints
-
-Add project-specific constraints here.
-"""
-
-DEFAULT_PLAN_TEMPLATE = """# Implementation Plan
-
-Status: NOT_STARTED
-
-## Steps
-
-1. Inspect the repository and existing architecture.
-2. Identify affected files and components.
-3. Implement the requirements incrementally.
-4. Run relevant tests.
-5. Diagnose and fix failures.
-6. Review the implementation.
-7. Verify every Definition of Done item.
-
-## Notes
-
-Update this plan whenever implementation discoveries materially change the approach.
-"""
-
-DEFAULT_STATE_TEMPLATE = """# Autonomous Agent State
-
-Status: NOT_STARTED
-
-Iteration: 0
-
-Current Objective:
-Read TASK.md and begin implementation.
-
-Completed:
-- Nothing yet.
-
-Current Work:
-None.
-
-Last Test Result:
-Not run.
-
-Current Problem:
-None.
-
-Next Action:
-Inspect the repository.
-
-Last Updated:
-Not set.
+Please inspect these requirements, complete any remaining work or verification, check the items in TASK.md (- [x]), and update STATE.md.
 """
 
 
-def load_dotenv(repo_root: Path) -> None:
-    """Load environment variables from .env if present without external dependencies."""
-    env_file = repo_root / ".env"
-    if not env_file.is_file():
-        return
-    try:
-        content = env_file.read_text(encoding="utf-8")
-        for line in content.splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, val = line.split("=", 1)
-            key = key.strip()
-            val = val.strip()
-            # Strip outer quotes if present
-            if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
-                val = val[1:-1]
-            if key not in os.environ:
-                os.environ[key] = val
-    except Exception as e:
-        print(f"[WARN] Failed to read .env: {e}", file=sys.stderr)
-
-
-def sanitize_secrets(text: str) -> str:
-    """Mask potential secrets, tokens, and keys in logs."""
-    if not text:
-        return ""
-    patterns = [
-        (r"(sk-[a-zA-Z0-9_\-]{20,})", "sk-***REDACTED***"),
-        (r"(gh[pousr]-[a-zA-Z0-9]{20,})", "gh*-***REDACTED***"),
-        (r"(Bearer\s+)[a-zA-Z0-9_\-\.]{20,}", r"\1***REDACTED***"),
-        (r"(password\s*[:=]\s*)[^\s,]+", r"\1***REDACTED***", re.IGNORECASE),
-        (r"(api[_-]?key\s*[:=]\s*)[^\s,]+", r"\1***REDACTED***", re.IGNORECASE),
-        (r"(token\s*[:=]\s*)[^\s,]+", r"\1***REDACTED***", re.IGNORECASE),
-    ]
-    sanitized = text
-    for item in patterns:
-        if len(item) == 2:
-            pat, repl = item
-            sanitized = re.sub(pat, repl, sanitized)
-        else:
-            pat, repl, flags = item
-            sanitized = re.sub(pat, repl, sanitized, flags=flags)
-    return sanitized
-
-
-def read_orchestrator_env(repo_root: Path) -> Dict[str, str]:
-    """Read orchestrator model settings with process-env precedence over .env."""
-    env_file = repo_root / ".env"
-    file_values: Dict[str, str] = {}
-    if env_file.is_file():
-        try:
-            for line in env_file.read_text(encoding="utf-8").splitlines():
-                line = line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                key, value = line.split("=", 1)
-                value = value.strip()
-                if (value.startswith('"') and value.endswith('"')) or (
-                    value.startswith("'") and value.endswith("'")
-                ):
-                    value = value[1:-1]
-                if key.strip() in ("ORCHESTRATOR_MODEL", "ORCHESTRATOR_VARIANT"):
-                    file_values[key.strip()] = value
-        except OSError as error:
-            print(f"[WARN] Failed to read orchestrator settings from .env: {error}", file=sys.stderr)
-    values = {
-        "ORCHESTRATOR_MODEL": os.environ.get(
-            "ORCHESTRATOR_MODEL", file_values.get("ORCHESTRATOR_MODEL", "")
-        ),
-        "ORCHESTRATOR_VARIANT": os.environ.get(
-            "ORCHESTRATOR_VARIANT", file_values.get("ORCHESTRATOR_VARIANT", "")
-        ),
-    }
-    return values
-
-
-@dataclass
-class ControllerConfig:
-    repo_root: Path
-    max_iterations: int = DEFAULT_MAX_ITERATIONS
-    max_runtime_seconds: int = DEFAULT_MAX_RUNTIME_SECONDS
-    max_stuck_iterations: int = DEFAULT_MAX_STUCK_ITERATIONS
-    test_timeout_seconds: int = DEFAULT_TEST_TIMEOUT_SECONDS
-    opencode_model: Optional[str] = None
-    opencode_variant: Optional[str] = None
-    orchestrator_model: Optional[str] = None
-    orchestrator_variant: Optional[str] = None
-    test_command: Optional[str] = None
-    use_persistent_server: bool = False
-    server_url: Optional[str] = None
-    auto_approve: bool = True
-    dry_run: bool = False
-    status_only: bool = False
-    resume: bool = False
-
-    @classmethod
-    def from_args(cls, repo_root: Path, args: argparse.Namespace) -> "ControllerConfig":
-        load_dotenv(repo_root)
-
-        max_iter = int(
-            args.max_iterations
-            or os.environ.get("MAX_ITERATIONS")
-            or DEFAULT_MAX_ITERATIONS
-        )
-        max_runtime = int(
-            args.max_runtime
-            or os.environ.get("MAX_RUNTIME_SECONDS")
-            or DEFAULT_MAX_RUNTIME_SECONDS
-        )
-        max_stuck = int(
-            os.environ.get("MAX_STUCK_ITERATIONS")
-            or DEFAULT_MAX_STUCK_ITERATIONS
-        )
-        test_timeout = int(
-            os.environ.get("TEST_TIMEOUT_SECONDS")
-            or DEFAULT_TEST_TIMEOUT_SECONDS
-        )
-
-        model = getattr(args, "model", None) or os.environ.get("OPENCODE_MODEL") or None
-        variant = getattr(args, "variant", None) or os.environ.get("OPENCODE_VARIANT") or None
-        if model is not None and not str(model).strip():
-            model = None
-        if variant is not None and not str(variant).strip():
-            variant = None
-        test_cmd = getattr(args, "test_cmd", None) or os.environ.get("TEST_COMMAND") or None
-
-        orchestrator_env = read_orchestrator_env(repo_root)
-        orchestrator_model = (
-            getattr(args, "orchestrator_model", None)
-            or orchestrator_env.get("ORCHESTRATOR_MODEL")
-            or None
-        )
-        orchestrator_variant = (
-            getattr(args, "orchestrator_variant", None)
-            or orchestrator_env.get("ORCHESTRATOR_VARIANT")
-            or None
-        )
-        if orchestrator_model is not None and not str(orchestrator_model).strip():
-            orchestrator_model = None
-        if orchestrator_variant is not None and not str(orchestrator_variant).strip():
-            orchestrator_variant = None
-
-        use_server = False
-        if getattr(args, "persistent_server", False):
-            use_server = True
-        elif os.environ.get("USE_PERSISTENT_SERVER", "").lower() in ("true", "1", "yes"):
-            use_server = True
-
-        server_url = os.environ.get("OPENCODE_SERVER_URL") or "http://127.0.0.1:4096"
-        auto_approve_env = os.environ.get("OPENCODE_AUTO_APPROVE", "true").lower()
-        auto_approve = auto_approve_env in ("true", "1", "yes")
-
-        return cls(
-            repo_root=repo_root,
-            max_iterations=max_iter,
-            max_runtime_seconds=max_runtime,
-            max_stuck_iterations=max_stuck,
-            test_timeout_seconds=test_timeout,
-            opencode_model=model,
-            opencode_variant=variant,
-            orchestrator_model=orchestrator_model,
-            orchestrator_variant=orchestrator_variant,
-            test_command=test_cmd,
-            use_persistent_server=use_server,
-            server_url=server_url,
-            auto_approve=auto_approve,
-            dry_run=args.dry_run,
-            status_only=args.status,
-            resume=args.resume,
-        )
-
-    @property
-    def orchestrator_enabled(self) -> bool:
-        return bool(self.orchestrator_model and str(self.orchestrator_model).strip())
-
-    @property
-    def reviewer_enabled(self) -> bool:
-        # Alias kept for parity with smol-style orchestration (reviewer == orchestrator).
-        return self.orchestrator_enabled
-
-
-class StateFile:
-    """Manages parsing and updating STATE.md."""
-
-    def __init__(self, path: Path):
-        self.path = path
-
-    def exists(self) -> bool:
-        return self.path.is_file()
-
-    def read_text(self) -> str:
-        if not self.exists():
-            return ""
-        return self.path.read_text(encoding="utf-8")
-
-    def parse(self) -> Dict[str, str]:
-        """Extract key fields from STATE.md."""
-        data = {
-            "status": "NOT_STARTED",
-            "iteration": "0",
-            "objective": "",
-            "completed": "",
-            "work": "",
-            "last_test": "",
-            "problem": "",
-            "next_action": "",
-            "last_updated": "",
-        }
-        content = self.read_text()
-        if not content:
-            return data
-
-        status_m = re.search(r"^Status:\s*([A-Za-z_]+)", content, re.MULTILINE | re.IGNORECASE)
-        if status_m:
-            data["status"] = status_m.group(1).strip().upper()
-
-        iter_m = re.search(r"^Iteration:\s*(\d+)", content, re.MULTILINE | re.IGNORECASE)
-        if iter_m:
-            data["iteration"] = iter_m.group(1).strip()
-
-        # Parse sections
-        def extract_section(title: str, next_titles: List[str]) -> str:
-            escaped_title = re.escape(title)
-            escaped_next = "|".join(re.escape(t) for t in next_titles)
-            pat = rf"^{escaped_title}:\s*\n(.*?)(?=^(?:{escaped_next}):|\Z)"
-            m = re.search(pat, content, re.MULTILINE | re.DOTALL)
-            if m:
-                return m.group(1).strip()
-            return ""
-
-        data["objective"] = extract_section("Current Objective", ["Completed", "Current Work"])
-        data["completed"] = extract_section("Completed", ["Current Work", "Last Test Result"])
-        data["work"] = extract_section("Current Work", ["Last Test Result", "Current Problem"])
-        data["last_test"] = extract_section("Last Test Result", ["Current Problem", "Next Action"])
-        data["problem"] = extract_section("Current Problem", ["Next Action", "Last Updated"])
-        data["next_action"] = extract_section("Next Action", ["Last Updated"])
-
-        updated_m = re.search(r"^Last Updated:\s*(.+)$", content, re.MULTILINE | re.IGNORECASE)
-        if updated_m:
-            data["last_updated"] = updated_m.group(1).strip()
-
-        return data
-
-    def update(
-        self,
-        status: Optional[str] = None,
-        iteration: Optional[int] = None,
-        completed: Optional[str] = None,
-        work: Optional[str] = None,
-        last_test: Optional[str] = None,
-        problem: Optional[str] = None,
-        next_action: Optional[str] = None,
-    ) -> None:
-        """Update fields in STATE.md while preserving structure."""
-        current = self.parse()
-        new_status = (status or current.get("status") or "IN_PROGRESS").upper()
-        new_iter = iteration if iteration is not None else int(current.get("iteration") or "0")
-        new_obj = current.get("objective") or "Read TASK.md and implement requirements."
-        new_comp = completed if completed is not None else (current.get("completed") or "- In progress.")
-        new_work = work if work is not None else (current.get("work") or "Executing autonomous iteration.")
-        new_test = last_test if last_test is not None else (current.get("last_test") or "Not run.")
-        new_prob = problem if problem is not None else (current.get("problem") or "None.")
-        new_next = next_action if next_action is not None else (current.get("next_action") or "Continue implementation.")
-        timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
-
-        content = f"""# Autonomous Agent State
-
-Status: {new_status}
-
-Iteration: {new_iter}
-
-Current Objective:
-{new_obj}
-
-Completed:
-{new_comp}
-
-Current Work:
-{new_work}
-
-Last Test Result:
-{new_test}
-
-Current Problem:
-{new_prob}
-
-Next Action:
-{new_next}
-
-Last Updated:
-{timestamp}
-"""
-        self.path.write_text(content, encoding="utf-8")
-
-
-@dataclass
-class ReviewerDecision:
-    verdict: str
-    summary: str
-    instructions: str
-
-    VALID_VERDICTS = {"on_track", "needs_correction", "complete"}
-
-    def approves_completion(self, test_code: int) -> bool:
-        return self.verdict == "complete" and test_code == 0
-
-    def gated_status(self, agent_status: str, test_code: int) -> str:
-        if agent_status == "BLOCKED":
-            return "BLOCKED"
-        if self.approves_completion(test_code):
-            return "COMPLETE"
-        if self.verdict == "needs_correction" or agent_status == "COMPLETE":
-            return "IN_PROGRESS"
-        return agent_status
-
-    def next_instruction(self) -> str:
-        if self.verdict == "needs_correction":
-            return (
-                "Independent reviewer findings — address these before continuing:\n"
-                f"Summary: {self.summary}\n"
-                f"Required correction: {self.instructions}"
-            )
-        if self.verdict == "on_track":
-            return (
-                "Independent reviewer confirms the work is on track. Continue with the "
-                f"next focused requirement. Reviewer note: {self.summary}\n"
-                f"Next direction: {self.instructions}"
-            )
-        return "The reviewer approved the implementation and verification. Do not make further changes."
-
-
-class ReviewerError(RuntimeError):
-    """Raised when the configured orchestrator cannot return a valid review."""
-
-
-# Alias: orchestrator and reviewer are the same role in this template.
-# The orchestrator is a second OpenCode invocation with a different model —
-# no separate API call or credentials are required.
-OrchestratorError = ReviewerError
-
-
-class GitManager:
-    """Safe Git helper that preserves user work and never executes destructive recovery."""
-
-    def __init__(self, repo_root: Path):
-        self.repo_root = repo_root
-        self.is_git = self._check_git()
-
-    def _check_git(self) -> bool:
-        try:
-            r = subprocess.run(
-                ["git", "rev-parse", "--is-inside-work-tree"],
-                cwd=self.repo_root,
-                capture_output=True,
-                text=True,
-            )
-            return r.returncode == 0 and "true" in r.stdout.lower()
-        except Exception:
-            return False
-
-    def status_short(self) -> str:
-        if not self.is_git:
-            return "Not a git repository."
-        try:
-            r = subprocess.run(
-                ["git", "status", "--short"],
-                cwd=self.repo_root,
-                capture_output=True,
-                text=True,
-            )
-            lines = []
-            for line in r.stdout.splitlines():
-                # Filter out logs/ so log files don't pollute git status
-                clean = line.strip()
-                if "logs/" in clean or ".env" in clean:
-                    continue
-                lines.append(line)
-            return "\n".join(lines).strip()
-        except Exception as e:
-            return f"Error querying git status: {e}"
-
-    def get_modified_files(self) -> Set[str]:
-        """Return relative paths of modified or untracked files excluding logs/."""
-        if not self.is_git:
-            return set()
-        status = self.status_short()
-        files = set()
-        for line in status.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            parts = line.split(maxsplit=1)
-            if len(parts) == 2:
-                file_path = parts[1].strip().strip('"')
-                if not file_path.startswith("logs"):
-                    files.add(file_path)
-        return files
-
-    def create_checkpoint(self, iteration: int, message: str) -> bool:
-        """Safely create a milestone checkpoint commit for modified project files."""
-        if not self.is_git:
-            return False
-        try:
-            # Check if there are changes to commit
-            status = self.status_short()
-            if not status:
-                return False
-
-            # Add modified files (excluding logs and .env)
-            subprocess.run(["git", "add", "."], cwd=self.repo_root, capture_output=True)
-            # Unstage logs if staged
-            subprocess.run(["git", "reset", "HEAD", "logs/"], cwd=self.repo_root, capture_output=True)
-            subprocess.run(["git", "reset", "HEAD", ".env"], cwd=self.repo_root, capture_output=True)
-
-            commit_msg = f"checkpoint: iteration {iteration:03d} - {message}"
-            r = subprocess.run(
-                ["git", "commit", "-m", commit_msg],
-                cwd=self.repo_root,
-                capture_output=True,
-                text=True,
-            )
-            return r.returncode == 0
-        except Exception as e:
-            print(f"[WARN] Failed to create git checkpoint: {e}", file=sys.stderr)
-            return False
-
-
-class TestDetector:
-    """Discovers and executes verification and test suites."""
-
-    def __init__(self, repo_root: Path, custom_cmd: Optional[str] = None):
-        self.repo_root = repo_root
-        self.custom_cmd = custom_cmd
-
-    def detect_command(self) -> Optional[str]:
-        """Detect standard verification commands based on repository contents."""
-        if self.custom_cmd:
-            return self.custom_cmd
-
-        # Python projects
-        has_pyproject = (self.repo_root / "pyproject.toml").is_file()
-        has_uv_lock = (self.repo_root / "uv.lock").is_file()
-        has_reqs = (self.repo_root / "requirements.txt").is_file()
-        has_pytest_ini = (
-            (self.repo_root / "pytest.ini").is_file()
-            or (self.repo_root / "setup.cfg").is_file()
-            or (self.repo_root / "tests").is_dir()
-            or (self.repo_root / "test").is_dir()
-        )
-
-        if has_uv_lock and shutil.which("uv"):
-            return "uv run pytest"
-        if has_pyproject or has_reqs or has_pytest_ini:
-            if shutil.which("pytest"):
-                return "pytest"
-            return f'"{sys.executable}" -m unittest discover'
-
-        # Node.js projects
-        pkg_json = self.repo_root / "package.json"
-        if pkg_json.is_file():
-            try:
-                import json
-                data = json.loads(pkg_json.read_text(encoding="utf-8"))
-                scripts = data.get("scripts", {})
-                test_script = scripts.get("test", "")
-                has_valid_test = test_script and "no test specified" not in test_script.lower()
-
-                if (self.repo_root / "pnpm-lock.yaml").is_file() and shutil.which("pnpm"):
-                    return "pnpm test" if has_valid_test else ("pnpm run build" if "build" in scripts else None)
-                if (self.repo_root / "yarn.lock").is_file() and shutil.which("yarn"):
-                    return "yarn test" if has_valid_test else ("yarn build" if "build" in scripts else None)
-                if shutil.which("npm"):
-                    return "npm test" if has_valid_test else ("npm run build" if "build" in scripts else None)
-            except Exception:
-                pass
-
-        # Rust / Cargo
-        if (self.repo_root / "Cargo.toml").is_file() and shutil.which("cargo"):
-            return "cargo test"
-
-        # Go
-        if (self.repo_root / "go.mod").is_file() and shutil.which("go"):
-            return "go test ./..."
-
-        return None
-
-    def run_verification(self, timeout_seconds: int) -> Tuple[int, str]:
-        """Execute verification command and return (exit_code, output)."""
-        cmd = self.detect_command()
-        if not cmd:
-            return 0, "No automated test suite detected. OpenCode responsible for verification."
-
-        try:
-            r = subprocess.run(
-                cmd,
-                cwd=self.repo_root,
-                capture_output=True,
-                text=True,
-                shell=True,
-                timeout=timeout_seconds,
-            )
-            output = (r.stdout + "\n" + r.stderr).strip()
-            return r.returncode, sanitize_secrets(output)
-        except subprocess.TimeoutExpired as e:
-            out = (e.stdout or "") + "\n" + (e.stderr or "") + f"\n[TIMEOUT] Verification timed out after {timeout_seconds}s."
-            return 124, sanitize_secrets(out)
-        except Exception as e:
-            return 1, f"Error running verification command ({cmd}): {e}"
-
-
-class StuckDetector:
-    """Tracks repository progress across iterations to detect lack of progress."""
-
-    def __init__(self, max_stuck: int = DEFAULT_MAX_STUCK_ITERATIONS):
-        self.max_stuck = max_stuck
-        self.consecutive_stuck = 0
-        self.history: List[Dict] = []
-
-    def record_and_evaluate(
-        self,
-        git_status_before: str,
-        git_status_after: str,
-        state_data: Dict[str, str],
-        test_code: int,
-        opencode_code: int,
-    ) -> Tuple[bool, int]:
-        """Evaluate whether this iteration made meaningful progress.
-
-        Returns (is_stuck, consecutive_stuck_count).
-        """
-        snapshot = {
-            "git_after": git_status_after,
-            "completed": state_data.get("completed", ""),
-            "work": state_data.get("work", ""),
-            "next_action": state_data.get("next_action", ""),
-            "status": state_data.get("status", ""),
-            "test_code": test_code,
-            "opencode_code": opencode_code,
-        }
-
-        progress_made = False
-
-        if not self.history:
-            # First iteration always counts as establishing baseline
-            progress_made = True
-        else:
-            prev = self.history[-1]
-            # Signals of progress:
-            # 1. Git status changed from before to after
-            git_changed = git_status_before != git_status_after
-            # 2. STATE.md completed items updated
-            completed_changed = snapshot["completed"] != prev["completed"]
-            # 3. STATE.md next action progressed
-            action_changed = snapshot["next_action"] != prev["next_action"]
-            # 4. Status transitioned (e.g. to VERIFYING or COMPLETE)
-            status_changed = snapshot["status"] != prev["status"]
-            # 5. Tests went from failing to passing
-            test_improved = prev["test_code"] != 0 and test_code == 0
-
-            if git_changed or completed_changed or status_changed or test_improved:
-                progress_made = True
-            elif action_changed and opencode_code == 0:
-                progress_made = True
-
-        self.history.append(snapshot)
-
-        if progress_made:
-            self.consecutive_stuck = 0
-        else:
-            self.consecutive_stuck += 1
-
-        is_stuck = self.consecutive_stuck >= self.max_stuck
-        return is_stuck, self.consecutive_stuck
-
-
-class OpenCodeRunner:
-    """Manages execution of OpenCode CLI commands."""
-
-    def __init__(self, config: ControllerConfig):
-        self.config = config
-        self.executable = self._find_opencode()
-        self.session_id: Optional[str] = None
-        self.server_process: Optional[subprocess.Popen] = None
-
-    def _find_opencode(self) -> Optional[str]:
-        exe = shutil.which("opencode")
-        if exe:
-            return exe
-        # On Windows, try opencode.cmd explicitly
-        if sys.platform == "win32":
-            exe_cmd = shutil.which("opencode.cmd") or shutil.which("opencode.CMD")
-            if exe_cmd:
-                return exe_cmd
-            exe_ps = shutil.which("opencode.ps1")
-            if exe_ps:
-                return exe_ps
-        return None
-
-    def verify_available(self) -> Tuple[bool, str]:
-        if not self.executable:
-            return False, "OpenCode executable not found in PATH."
-        try:
-            r = subprocess.run(
-                [self.executable, "--version"],
-                capture_output=True,
-                text=True,
-                shell=True,
-                stdin=subprocess.DEVNULL,
-                timeout=10,
-            )
-            if r.returncode == 0:
-                return True, r.stdout.strip()
-            return False, f"OpenCode returned exit code {r.returncode}: {r.stderr.strip()}"
-        except Exception as e:
-            return False, f"Failed to execute OpenCode: {e}"
-
-    def ensure_server(self) -> Optional[str]:
-        """Ensure persistent server is running if configured. Return server URL or None."""
-        if not self.config.use_persistent_server:
-            return None
-        url = self.config.server_url or "http://127.0.0.1:4096"
-
-        # Check if already running
-        try:
-            req = urllib.request.Request(f"{url}/global/health")
-            with urllib.request.urlopen(req, timeout=2) as resp:
-                if resp.status == 200:
-                    return url
-        except Exception:
-            pass
-
-        # Try to launch server
-        print(f"[INFO] Launching persistent OpenCode server at {url}...")
-        port = "4096"
-        host = "127.0.0.1"
-        if ":" in url:
-            port_match = re.search(r":(\d+)", url)
-            if port_match:
-                port = port_match.group(1)
-
-        try:
-            self.server_process = subprocess.Popen(
-                [self.executable, "serve", "--port", port, "--hostname", host],
-                cwd=self.config.repo_root,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                shell=True,
-            )
-            # Wait for healthcheck
-            for _ in range(15):
-                time.sleep(0.5)
-                try:
-                    req = urllib.request.Request(f"{url}/global/health")
-                    with urllib.request.urlopen(req, timeout=1) as resp:
-                        if resp.status == 200:
-                            print(f"[INFO] Persistent OpenCode server healthy at {url}.")
-                            return url
-                except Exception:
-                    continue
-        except Exception as e:
-            print(f"[WARN] Failed to start OpenCode server: {e}. Falling back to standard mode.", file=sys.stderr)
-
-        return None
-
-    def shutdown_server(self) -> None:
-        """Safely terminate server process if launched by controller."""
-        if self.server_process:
-            try:
-                if sys.platform == "win32":
-                    subprocess.run(["taskkill", "/F", "/T", "/PID", str(self.server_process.pid)], capture_output=True)
-                else:
-                    self.server_process.terminate()
-            except Exception:
-                pass
-            self.server_process = None
-
-    def build_command_for_model(
-        self,
-        prompt: str,
-        model: Optional[str] = None,
-        variant: Optional[str] = None,
-        is_first: bool = True,
-        server_url: Optional[str] = None,
-    ) -> List[str]:
-        """Build an `opencode run` command for an explicit model/variant.
-
-        The worker uses ``opencode_model``/``opencode_variant`` while the
-        orchestrator passes its own ``orchestrator_model``/``orchestrator_variant`` —
-        the same CLI, just a different model. No separate API call is required.
-        """
-        assert self.executable is not None, "OpenCode executable is missing"
-        cmd = [self.executable, "run"]
-        if server_url:
-            cmd.extend(["--attach", server_url])
-        elif not is_first:
-            cmd.append("-c")
-        effective_model = model if model is not None else self.config.opencode_model
-        effective_variant = variant if variant is not None else self.config.opencode_variant
-        if effective_model:
-            cmd.extend(["-m", effective_model])
-        if effective_variant:
-            cmd.extend(["--variant", effective_variant])
-        if self.config.auto_approve:
-            cmd.append("--auto")
-        cmd.append(prompt)
-        return cmd
-
-    def execute_iteration(self, prompt: str, is_first: bool) -> Tuple[int, str, str, List[str], float]:
-        """Run one non-interactive iteration of OpenCode with prompt.
-
-        Returns (exit_code, stdout, stderr, cmd_list, duration_seconds).
-        """
-        assert self.executable is not None, "OpenCode executable is missing"
-        server_url = self.ensure_server()
-
-        cmd = self.build_command_for_model(
-            prompt,
-            model=self.config.opencode_model,
-            variant=self.config.opencode_variant,
-            is_first=is_first,
-            server_url=server_url,
-        )
-
-        start_time = time.time()
-        try:
-            # Always pass stdin=subprocess.DEVNULL to prevent OpenCode waiting on stdin in non-interactive mode
-            r = subprocess.run(
-                cmd,
-                cwd=self.config.repo_root,
-                capture_output=True,
-                text=True,
-                shell=True,
-                stdin=subprocess.DEVNULL,
-                timeout=1800,  # 30 min iteration timeout
-            )
-            duration = time.time() - start_time
-            stdout = sanitize_secrets(r.stdout)
-            stderr = sanitize_secrets(r.stderr)
-            return r.returncode, stdout, stderr, cmd, duration
-        except subprocess.TimeoutExpired as e:
-            duration = time.time() - start_time
-            stdout = sanitize_secrets(e.stdout or "")
-            stderr = sanitize_secrets((e.stderr or "") + "\n[TIMEOUT] OpenCode iteration timed out.")
-            return 124, stdout, stderr, cmd, duration
-        except Exception as e:
-            duration = time.time() - start_time
-            return 1, "", f"Execution failed: {e}", cmd, duration
-
-
-class ReviewerClient:
-    """Model-switch orchestrator/reviewer.
-
-    Unlike an external API reviewer, this orchestrator is a second OpenCode
-    invocation with a different model (``ORCHESTRATOR_MODEL``). The worker
-    builds with ``OPENCODE_MODEL``; the orchestrator reviews with
-    ``ORCHESTRATOR_MODEL`` via the same ``opencode run`` CLI.
-    """
-
-    MAX_DIFF_CHARS = 24000
-    MAX_CONTEXT_FILE_CHARS = 10000
-    MAX_RESPONSE_CHARS = 12000
-
-    def __init__(self, config: ControllerConfig, runner: Optional["OpenCodeRunner"] = None):
-        self.config = config
-        # Lazily reuse the worker runner type so tests can inject fakes.
-        # Import is local to avoid ordering issues; OpenCodeRunner is defined above.
-        self._runner_override = runner
-
-    def _get_runner(self) -> "OpenCodeRunner":
-        if self._runner_override is not None:
-            return self._runner_override
-        return OpenCodeRunner(self.config)
-
-    def describe_routing(self) -> str:
-        worker = self.config.opencode_model or "(default)"
-        orchestrator = self.config.orchestrator_model or "(disabled)"
-        variant = self.config.orchestrator_variant or "(default-variant)"
-        return f"worker={worker} orchestrator={orchestrator} variant={variant} via opencode run -m"
-
-    def collect_review_context(
-        self, task: str, plan: str, state: str, test_output: str
-    ) -> str:
-        changed_files: List[str] = []
-        try:
-            result = subprocess.run(
-                ["git", "status", "--porcelain", "--untracked-files=all"],
-                cwd=self.config.repo_root,
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-            for line in result.stdout.splitlines():
-                relpath = line[3:].strip().strip('"')
-                if relpath and Path(relpath).name.startswith(".env") is False and not relpath.startswith("logs/"):
-                    changed_files.append(relpath)
-        except Exception:
-            changed_files = []
-
-        diff_parts: List[str] = []
-        if changed_files:
-            try:
-                diff = subprocess.run(
-                    ["git", "diff", "HEAD", "--no-ext-diff", "--", *changed_files],
-                    cwd=self.config.repo_root,
-                    capture_output=True,
-                    text=True,
-                    timeout=15,
-                )
-                diff_parts.append(diff.stdout)
-            except Exception:
-                pass
-            for relpath in changed_files:
-                if Path(relpath).name.startswith(".env") or relpath.startswith("logs/"):
-                    continue
-                candidate = (self.config.repo_root / relpath).resolve()
-                try:
-                    candidate.relative_to(self.config.repo_root.resolve())
-                except ValueError:
-                    continue
-                if candidate.is_file():
-                    try:
-                        content = candidate.read_text(encoding="utf-8", errors="replace")
-                        new_file_diff = "".join(
-                            difflib.unified_diff(
-                                [],
-                                content.splitlines(keepends=True),
-                                fromfile="/dev/null",
-                                tofile=relpath,
-                            )
-                        )
-                        if new_file_diff:
-                            diff_parts.append(new_file_diff)
-                    except OSError:
-                        continue
-
-        diff_text = sanitize_secrets("\n".join(diff_parts))
-        if not changed_files:
-            excluded_dirs = {".git", "node_modules", ".venv", "venv", "__pycache__", "logs", "dist", "build"}
-            candidates = []
-            cutoff = time.time() - 2 * 60 * 60
-            for candidate in self.config.repo_root.rglob("*"):
-                if not candidate.is_file() or any(part in excluded_dirs for part in candidate.parts):
-                    continue
-                if candidate.name.startswith(".env"):
-                    continue
-                if candidate.suffix.lower() not in {".py", ".js", ".ts", ".tsx", ".jsx", ".json", ".md", ".html", ".css", ".go", ".rs", ".java", ".cs", ".yaml", ".yml", ".toml", ".sh", ".ps1"}:
-                    continue
-                try:
-                    modified = candidate.stat().st_mtime
-                    if modified >= cutoff:
-                        candidates.append((modified, candidate))
-                except OSError:
-                    continue
-            for _modified, candidate in sorted(candidates, reverse=True)[:25]:
-                relative = str(candidate.relative_to(self.config.repo_root))
-                changed_files.append(relative)
-                try:
-                    diff_text += f"\n--- {relative} (recent file snapshot) ---\n{candidate.read_text(encoding='utf-8', errors='replace')[:self.MAX_CONTEXT_FILE_CHARS]}"
-                except OSError:
-                    continue
-
-        changed_names = "\n".join(changed_files[:100]) or "No changed files detected."
-        return f"""TASK.md:
-{task[:self.MAX_CONTEXT_FILE_CHARS]}
-
-PLAN.md:
-{plan[:self.MAX_CONTEXT_FILE_CHARS]}
-
-STATE.md:
-{state[:self.MAX_CONTEXT_FILE_CHARS]}
-
-Changed files:
-{changed_names}
-
-Verification result:
-{test_output[:self.MAX_CONTEXT_FILE_CHARS]}
-
-Diff / bounded file view:
-{diff_text[:self.MAX_DIFF_CHARS] or '(No diff available.)'}
-"""
-
-    def build_review_prompt(self, task: str, context: str) -> str:
-        context = sanitize_secrets(context)
-        return (
-            f"{ORCHESTRATOR_SYSTEM_PROMPT}\n\n"
-            f"TASK:\n{task}\n\nITERATION EVIDENCE:\n{context}"
-        )
-
-    def _request_via_opencode(self, prompt: str) -> str:
-        """Run the orchestrator model via the OpenCode CLI and return raw stdout."""
-        if not self.config.orchestrator_model:
-            raise ReviewerError("Orchestrator model is not configured (ORCHESTRATOR_MODEL).")
-        runner = self._get_runner()
-        if getattr(runner, "executable", None) is None and isinstance(runner, OpenCodeRunner):
-            # Resolve executable lazily; fail clearly when opencode is missing.
-            runner.executable = runner._find_opencode()
-            if not runner.executable:
-                raise ReviewerError("OpenCode executable not found in PATH for orchestrator review.")
-        server_url = None
-        try:
-            if isinstance(runner, OpenCodeRunner):
-                server_url = runner.ensure_server()
-        except Exception:
-            server_url = None
-        if isinstance(runner, OpenCodeRunner):
-            cmd = runner.build_command_for_model(
-                prompt,
-                model=self.config.orchestrator_model,
-                variant=self.config.orchestrator_variant,
-                is_first=True,
-                server_url=server_url,
-            )
-        else:
-            # Test fakes expose execute_iteration(prompt, is_first).
-            cmd = ["opencode-orchestrator-stub"]
-        try:
-            if isinstance(runner, OpenCodeRunner):
-                result = subprocess.run(
-                    cmd,
-                    cwd=self.config.repo_root,
-                    capture_output=True,
-                    text=True,
-                    shell=True,
-                    stdin=subprocess.DEVNULL,
-                    timeout=self.config.test_timeout_seconds,
-                )
-                if result.returncode != 0:
-                    raise ReviewerError(
-                        f"Orchestrator model run failed (exit {result.returncode}): "
-                        f"{sanitize_secrets((result.stdout or '') + (result.stderr or ''))[:2000]}"
-                    )
-                return (result.stdout or "").strip()[: self.MAX_RESPONSE_CHARS]
-            # Fallback for injected fakes.
-            code, stdout, _stderr, _cmd, _dur = runner.execute_iteration(prompt, True)
-            if code != 0:
-                raise ReviewerError(f"Orchestrator model run failed (exit {code}).")
-            return (stdout or "").strip()[: self.MAX_RESPONSE_CHARS]
-        except subprocess.TimeoutExpired as error:
-            raise ReviewerError(
-                f"Orchestrator model run timed out after {self.config.test_timeout_seconds}s."
-            ) from error
-        except ReviewerError:
-            raise
-        except Exception as error:
-            raise ReviewerError(f"Orchestrator request failed: {sanitize_secrets(str(error))}") from error
-
-    @staticmethod
-    def _parse_decision_content(content: str) -> ReviewerDecision:
-        text = (content or "").strip()
-        if not text:
-            raise ValueError("Empty orchestrator response.")
-        if "```" in text:
-            text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip(), flags=re.IGNORECASE)
-        data = json.loads(text)
-        verdict = data.get("verdict")
-        summary = data.get("summary")
-        instructions = data.get("instructions", "")
-        if verdict not in ReviewerDecision.VALID_VERDICTS:
-            raise ValueError("Unknown orchestrator verdict.")
-        if not isinstance(summary, str) or not isinstance(instructions, str):
-            raise ValueError("Orchestrator summary and instructions must be strings.")
-        if verdict == "needs_correction" and not instructions.strip():
-            raise ValueError("Orchestrator correction verdict must include instructions.")
-        return ReviewerDecision(verdict, summary[:2000], instructions[:4000])
-
-    def review(self, task: str, context: str) -> ReviewerDecision:
-        prompt = self.build_review_prompt(task, context)
-        errors: List[str] = []
-        for _attempt in range(2):
-            try:
-                content = self._request_via_opencode(prompt)
-                return self._parse_decision_content(content)
-            except (ReviewerError, json.JSONDecodeError, ValueError, AttributeError, TypeError) as error:
-                errors.append(sanitize_secrets(str(error)))
-        raise ReviewerError("Orchestrator failed after one retry: " + "; ".join(errors))
-
-
-class AutonomousController:
-    """Main orchestration controller for autonomous OpenCode loops."""
-
-    def __init__(self, config: ControllerConfig):
-        self.config = config
-        self.state_file = StateFile(config.repo_root / "STATE.md")
-        self.git = GitManager(config.repo_root)
-        self.test_detector = TestDetector(config.repo_root, config.test_command)
-        self.stuck_detector = StuckDetector(config.max_stuck_iterations)
-        self.runner = OpenCodeRunner(config)
-        self.reviewer = ReviewerClient(config) if config.orchestrator_enabled else None
-        # Alias: orchestrator and reviewer are the same model-switch role.
-        self.orchestrator = self.reviewer
-        self.logs_dir = config.repo_root / "logs"
-
-    def preflight_setup(self) -> bool:
-        """Verify environment and scaffold missing standard files if needed."""
+# =====================================================================
+# Logger
+# =====================================================================
+class IterationLogger:
+    def __init__(self, logs_dir: Path):
+        self.logs_dir = logs_dir
         self.logs_dir.mkdir(parents=True, exist_ok=True)
-
-        task_path = self.config.repo_root / "TASK.md"
-        if not task_path.is_file():
-            print("[ERROR] TASK.md is missing. Please define your task in TASK.md.", file=sys.stderr)
-            return False
-
-        plan_path = self.config.repo_root / "PLAN.md"
-        if not plan_path.is_file():
-            plan_path.write_text(DEFAULT_PLAN_TEMPLATE, encoding="utf-8")
-            print("[INFO] Created default PLAN.md.")
-
-        state_path = self.config.repo_root / "STATE.md"
-        if not state_path.is_file():
-            state_path.write_text(DEFAULT_STATE_TEMPLATE, encoding="utf-8")
-            print("[INFO] Created default STATE.md.")
-
-        agents_path = self.config.repo_root / "AGENTS.md"
-        if not agents_path.is_file():
-            print("[WARN] AGENTS.md not found. Agent instructions should be present for optimal performance.")
-
-        # Verify OpenCode CLI
-        ok, version = self.runner.verify_available()
-        if not ok:
-            print(f"[ERROR] OpenCode is not available: {version}", file=sys.stderr)
-            print("Please ensure OpenCode is installed and added to PATH (e.g. npm install -g opencode-ai).", file=sys.stderr)
-            return False
-        print(f"[OK] OpenCode detected: {version}")
-        if self.reviewer:
-            print(f"[OK] Orchestrator enabled (model={self.config.orchestrator_model}).")
-            print(f"[OK] Routing: {self.reviewer.describe_routing()}")
-        else:
-            print("[INFO] Orchestrator is not configured; using single-model workflow only.")
-            print("[INFO] Set ORCHESTRATOR_MODEL (and optionally ORCHESTRATOR_VARIANT) to enable review.")
-
-        # Detect tests
-        test_cmd = self.test_detector.detect_command()
-        if test_cmd:
-            print(f"[OK] Automated test command detected: {test_cmd}")
-        else:
-            print("[INFO] No automated test suite detected. OpenCode will determine validation steps.")
-
-        return True
-
-    def show_status(self) -> None:
-        """Display current agent status and state."""
-        print("=" * 60)
-        print("AUTONOMOUS AGENT STATUS")
-        print("=" * 60)
-        state_data = self.state_file.parse()
-        print(f"Status:         {state_data.get('status')}")
-        print(f"Iteration:      {state_data.get('iteration')}")
-        print(f"Current Obj:    {state_data.get('objective')}")
-        print(f"Next Action:    {state_data.get('next_action')}")
-        print(f"Last Test:      {state_data.get('last_test')}")
-        print(f"Current Prob:   {state_data.get('problem')}")
-        print(f"Last Updated:   {state_data.get('last_updated')}")
-        print("-" * 60)
-        print("Git Status:")
-        print(self.git.status_short() or "Clean working directory.")
-        print("=" * 60)
-
-    def build_iteration_prompt(
-        self,
-        stuck: bool,
-        test_failed: bool,
-        test_output: str,
-        reviewer_instruction: str,
-    ) -> str:
-        if stuck:
-            prompt = PROMPT_STUCK_RECOVERY
-        elif test_failed:
-            prompt = PROMPT_FAILURE_RECOVERY.format(test_output=test_output)
-        else:
-            prompt = PROMPT_AUTONOMOUS_ITERATION
-        if reviewer_instruction:
-            prompt += "\n\nORCHESTRATOR DIRECTION FOR THIS ITERATION:\n" + reviewer_instruction
-        return prompt
 
     def write_iteration_log(
         self,
         iteration: int,
-        timestamp: str,
-        status_before: str,
-        git_before: str,
-        cmd_list: List[str],
-        opencode_code: int,
-        duration: float,
+        start_time: datetime,
+        end_time: datetime,
+        command_line: List[str],
         stdout: str,
         stderr: str,
-        test_cmd: Optional[str],
-        test_code: int,
-        test_output: str,
-        git_after: str,
-        state_after: str,
-        reviewer_decision: Optional[ReviewerDecision] = None,
+        exit_code: int,
+        test_command: Optional[str],
+        test_output: Optional[str],
+        test_exit_code: Optional[int],
+        snapshot_before: Dict[str, Any],
+        snapshot_after: Dict[str, Any],
     ) -> Path:
-        """Write structured log file for the iteration."""
-        log_path = self.logs_dir / f"iteration-{iteration:03d}.log"
-        cmd_str = " ".join(f'"{c}"' if " " in c else c for c in cmd_list)
-        if reviewer_decision:
-            reviewer_section = (
-                f"Verdict: {reviewer_decision.verdict}\n"
-                f"Summary: {reviewer_decision.summary}\n"
-                f"Instructions: {reviewer_decision.instructions or '(None)'}"
+        log_file = self.logs_dir / f"iteration-{iteration:03d}.log"
+        lines = [
+            f"=== Iteration {iteration:03d} ===",
+            f"Start Time: {start_time.isoformat()}",
+            f"End Time:   {end_time.isoformat()}",
+            f"Duration:   {(end_time - start_time).total_seconds():.2f}s",
+            "",
+            "--- Antigravity Command ---",
+            " ".join(command_line),
+            f"Exit Code: {exit_code}",
+            "",
+            "--- STDOUT ---",
+            stdout or "(empty)",
+            "",
+            "--- STDERR ---",
+            stderr or "(empty)",
+            "",
+            "--- Verification Test ---",
+            f"Command:   {test_command or 'None'}",
+            f"Exit Code: {test_exit_code if test_exit_code is not None else 'N/A'}",
+            f"Output:\n{test_output or '(none)'}",
+            "",
+            "--- Repository State Before ---",
+            f"Git Status: {snapshot_before.get('git_status', 'N/A')}",
+            f"Files Count: {snapshot_before.get('file_count', 0)}",
+            "",
+            "--- Repository State After ---",
+            f"Git Status: {snapshot_after.get('git_status', 'N/A')}",
+            f"Files Count: {snapshot_after.get('file_count', 0)}",
+            "",
+        ]
+        log_file.write_text("\n".join(lines), encoding="utf-8")
+        return log_file
+
+
+# =====================================================================
+# Controller
+# =====================================================================
+class AutonomousController:
+    def __init__(self, config: Config):
+        self.config = config
+        self.git_mgr = GitManager(config.repo_root)
+        self.verifier = VerificationRunner(config)
+        self.logger = IterationLogger(config.logs_dir)
+        self.interrupted = False
+        self._register_signals()
+
+    def _register_signals(self) -> None:
+        def handler(signum, frame):
+            print("\n[!] Interrupt received. Safely stopping controller...")
+            self.interrupted = True
+
+        signal.signal(signal.SIGINT, handler)
+        signal.signal(signal.SIGTERM, handler)
+
+    def verify_prerequisites(self) -> None:
+        """Verify repository root, required files, and Antigravity CLI."""
+        if not (self.config.repo_root / "TASK.md").is_file():
+            print("[!] TASK.md not found. Creating template...")
+            self.config.task_file.write_text(
+                "# Autonomous Task\n\n## Objective\n\nDescribe the desired end result here.\n\n## Requirements\n\n- Requirement 1\n\n## Definition of Done\n\n- [ ] Requirement 1 implemented\n- [ ] Relevant tests pass\n",
+                encoding="utf-8",
             )
-        elif self.reviewer:
-            reviewer_section = "Reviewer: enabled but no decision recorded."
-        else:
-            reviewer_section = "Reviewer: disabled (single-model mode)."
 
-        content = f"""================================================================================
-AUTONOMOUS AGENT ITERATION LOG
-================================================================================
-Iteration:             {iteration:03d}
-Timestamp:             {timestamp}
-Status Before:         {status_before}
-Duration:              {duration:.2f}s
-Reviewer:               {reviewer_section}
+        if not self.config.plan_file.is_file():
+            print("[!] PLAN.md not found. Creating template...")
+            self.config.plan_file.write_text(
+                "# Implementation Plan\n\nStatus: NOT_STARTED\n\n## Steps\n1. Inspect repository.\n",
+                encoding="utf-8",
+            )
 
-GIT STATUS BEFORE:
-{git_before or 'Clean.'}
+        if not self.config.state_file.is_file():
+            print("[!] STATE.md not found. Creating initial state...")
+            AgentState(
+                status=STATUS_NOT_STARTED,
+                iteration=0,
+                current_objective="Read TASK.md and begin implementation.",
+                completed="- Nothing yet.",
+                current_work="None.",
+                last_test_result="Not run.",
+                current_problem="None.",
+                next_action="Inspect the repository.",
+                last_updated=datetime.now(timezone.utc).isoformat(),
+            ).save(self.config.state_file)
 
-================================================================================
-OPENCODE EXECUTION
-================================================================================
-Command:               {cmd_str}
-Exit Code:             {opencode_code}
+        if not self.config.agents_file.is_file():
+            print("[!] AGENTS.md not found. Please ensure AGENTS.md exists.")
 
-STDOUT:
-{stdout or '(None)'}
+        self.config.logs_dir.mkdir(parents=True, exist_ok=True)
 
-STDERR:
-{stderr or '(None)'}
+        # Check Antigravity CLI executable
+        agy_cmd = self.config.antigravity_command
+        # If it's a simple command name, check shutil.which
+        if not shutil.which(agy_cmd):
+            # Check if agy or agy.exe is in PATH
+            if not shutil.which("agy") and not shutil.which("agy.exe"):
+                raise RuntimeError(
+                    f"Antigravity CLI executable '{agy_cmd}' not found on PATH. Please ensure Antigravity is installed."
+                )
 
-================================================================================
-AUTOMATED VERIFICATION
-================================================================================
-Command:               {test_cmd or 'None (discretionary)'}
-Exit Code:             {test_code}
+    def print_status(self) -> None:
+        """Print current STATE.md and latest progress."""
+        state = AgentState.load(self.config.state_file)
+        has_reqs, checked, unchecked = TaskChecker.inspect(self.config.task_file)
+        print("\n=======================================================")
+        print("          AUTONOMOUS AGENT CONTROLLER STATUS           ")
+        print("=======================================================")
+        print(f"Status:            {state.status}")
+        print(f"Iteration:         {state.iteration} / {self.config.max_iterations}")
+        print(f"Current Objective: {state.current_objective}")
+        print(f"Next Action:       {state.next_action}")
+        print(f"Current Problem:   {state.current_problem}")
+        print(f"Last Test Result:  {state.last_test_result}")
+        print(f"Last Updated:      {state.last_updated}")
+        print("-------------------------------------------------------")
+        print(f"Definition of Done: {len(checked)} complete, {len(unchecked)} remaining")
+        for u in unchecked[:5]:
+            print(f"  [ ] {u}")
+        if len(unchecked) > 5:
+            print(f"  ... and {len(unchecked) - 5} more")
+        print("=======================================================\n")
 
-OUTPUT:
-{test_output or '(None)'}
+    def run_dry_run(self) -> None:
+        """Simulate controller run and display commands/prompts."""
+        print("\n=== DRY RUN MODE ===")
+        print(f"Repository root:      {self.config.repo_root}")
+        print(f"Antigravity command:  {self.config.antigravity_command}")
+        print(f"Max iterations:       {self.config.max_iterations}")
+        print(f"Max runtime:          {self.config.max_runtime_seconds}s")
+        print(f"Max stuck iterations: {self.config.max_stuck_iterations}")
+        print(f"Test timeout:         {self.config.test_timeout_seconds}s")
+        print(f"Session continuation: {self.config.use_session}")
+        print(f"Git repo detected:    {self.git_mgr.is_git}")
 
-================================================================================
-REPOSITORY STATE AFTER
-================================================================================
-GIT STATUS AFTER:
-{git_after or 'Clean.'}
+        detected_test = self.verifier.detect_command()
+        print(f"Detected test cmd:    {detected_test or 'None (smoke test / agent responsibility)'}")
 
-STATE.MD AFTER:
-{state_after}
-================================================================================
-"""
-        log_path.write_text(content, encoding="utf-8")
-        return log_path
+        has_reqs, checked, unchecked = TaskChecker.inspect(self.config.task_file)
+        print(f"Task definition:      {len(checked)} checked DoD items, {len(unchecked)} unchecked DoD items")
+
+        cmd = [self.config.antigravity_command, "-p", "<prompt>"]
+        if self.config.skip_permissions:
+            cmd.append("--dangerously-skip-permissions")
+        print(f"Sample invocation:    {' '.join(cmd)}")
+        print("\nSample Standard Prompt:\n" + STANDARD_AUTONOMOUS_PROMPT)
+        print("\nDry run completed successfully. No changes made.")
 
     def run(self) -> int:
-        """Execute autonomous loop until complete, blocked, or limits reached."""
-        if not self.preflight_setup():
-            return 1
+        """Main autonomous loop."""
+        self.verify_prerequisites()
 
         if self.config.status_only:
-            self.show_status()
+            self.print_status()
             return 0
-
-        state_data = self.state_file.parse()
-        current_status = state_data.get("status", "NOT_STARTED")
-
-        if current_status == "COMPLETE" and not self.config.resume:
-            print("[INFO] Task is already marked COMPLETE in STATE.md. Use --resume to continue or reset STATE.md to start anew.")
-            return 0
-
-        if current_status == "BLOCKED" and not self.config.resume:
-            print(f"[WARN] Task is currently marked BLOCKED: {state_data.get('problem')}. Use --resume to continue after resolving.")
-            return 1
-
-        start_iter = int(state_data.get("iteration") or "0") + 1
-        if not self.config.resume and start_iter > 1:
-            print(f"[INFO] Resuming from iteration {start_iter} based on STATE.md.")
-
-        start_time = time.time()
-        last_test_failed = False
-        last_test_output = ""
-        stuck_in_recovery = False
-        reviewer_instruction = ""
-
-        print("=" * 60)
-        print("STARTING AUTONOMOUS OPENCODE LOOP")
-        print(f"Repository Root: {self.config.repo_root}")
-        print(f"Max Iterations:  {self.config.max_iterations}")
-        print(f"Max Runtime:     {self.config.max_runtime_seconds}s ({self.config.max_runtime_seconds // 60}m)")
-        print(f"Max Stuck:       {self.config.max_stuck_iterations} iterations")
-        print("=" * 60)
 
         if self.config.dry_run:
-            print("[DRY-RUN] Preflight checks passed.")
-            print(f"[DRY-RUN] Next iteration would be #{start_iter}.")
-            test_cmd = self.test_detector.detect_command()
-            print(f"[DRY-RUN] Test command: {test_cmd or 'Discretionary'}")
-            print(f"[DRY-RUN] Initial Git state:\n{self.git.status_short() or 'Clean.'}")
-            print("[DRY-RUN] Dry run complete. No modifications made.")
+            self.run_dry_run()
             return 0
 
-        try:
-            for iteration in range(start_iter, self.config.max_iterations + 1):
-                elapsed = time.time() - start_time
-                if elapsed >= self.config.max_runtime_seconds:
-                    print(f"\n[STOP] Reached maximum runtime limit ({self.config.max_runtime_seconds}s). Stopping safely.")
-                    self.state_file.update(
-                        status="IN_PROGRESS",
-                        iteration=iteration - 1,
-                        problem=f"Reached maximum runtime limit of {self.config.max_runtime_seconds}s.",
-                        next_action="Resume with --resume and extended runtime if desired.",
-                    )
-                    return 0
+        # Load initial state
+        state = AgentState.load(self.config.state_file)
 
-                iter_timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
-                state_before = self.state_file.parse()
-                status_before = state_before.get("status", "IN_PROGRESS")
-                git_before = self.git.status_short()
+        # Handle resume vs new run
+        if self.config.resume or state.iteration > 0:
+            start_iteration = state.iteration + 1
+            print(f"[*] Resuming autonomous workflow from iteration {start_iteration} (Status: {state.status})...")
+        else:
+            start_iteration = 1
+            state.status = STATUS_IN_PROGRESS
+            state.iteration = 0
+            state.save(self.config.state_file)
+            print("[*] Starting new autonomous workflow from iteration 1...")
 
-                print(f"\n>>> ITERATION {iteration:03d}/{self.config.max_iterations} (Elapsed: {int(elapsed)}s)")
+        start_time = time.time()
+        stuck_counter = 0
+        last_snapshot: Optional[Dict[str, Any]] = None
+        recovery_prompt_override: Optional[str] = None
 
-                # Select Prompt (worker + orchestrator direction + recovery states)
-                prompt = self.build_iteration_prompt(
-                    stuck=stuck_in_recovery,
-                    test_failed=last_test_failed,
-                    test_output=last_test_output,
-                    reviewer_instruction=reviewer_instruction,
+        for iteration in range(start_iteration, self.config.max_iterations + 1):
+            if self.interrupted:
+                state.status = STATUS_BLOCKED
+                state.current_problem = "Interrupted by user signal."
+                state.save(self.config.state_file)
+                print("\n[!] Execution stopped safely due to user interrupt.")
+                return 130
+
+            # Check runtime limit
+            elapsed = time.time() - start_time
+            if elapsed > self.config.max_runtime_seconds:
+                print(f"\n[!] Maximum runtime exceeded ({elapsed:.1f}s > {self.config.max_runtime_seconds}s).")
+                state.status = STATUS_BLOCKED
+                state.current_problem = f"Runtime limit exceeded ({self.config.max_runtime_seconds}s)."
+                state.save(self.config.state_file)
+                return 1
+
+            print(f"\n=======================================================")
+            print(f"       AUTONOMOUS ITERATION {iteration:03d} / {self.config.max_iterations}")
+            print(f"=======================================================")
+            iter_start = datetime.now(timezone.utc)
+
+            # Snapshot before iteration
+            snapshot_before = RepoSnapshot.capture(self.config.repo_root, self.git_mgr)
+
+            # Construct Prompt
+            if recovery_prompt_override:
+                prompt_to_send = recovery_prompt_override
+                recovery_prompt_override = None
+            elif stuck_counter >= self.config.max_stuck_iterations:
+                print("[!] Stuck counter reached threshold. Feeding stuck recovery prompt.")
+                prompt_to_send = STUCK_RECOVERY_PROMPT
+            else:
+                prompt_to_send = STANDARD_AUTONOMOUS_PROMPT
+
+            # Prepare Antigravity Command
+            cmd = [self.config.antigravity_command]
+            if self.config.use_session and iteration > 1:
+                # Add continuation flag
+                cmd.append("-c")
+            if self.config.skip_permissions:
+                cmd.append("--dangerously-skip-permissions")
+            cmd.extend(["-p", prompt_to_send])
+
+            print(f"[*] Launching Antigravity iteration {iteration}...")
+            stdout_text = ""
+            stderr_text = ""
+            exit_code = 0
+
+            try:
+                proc = subprocess.Popen(
+                    cmd,
+                    cwd=str(self.config.repo_root),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
                 )
-                if stuck_in_recovery:
-                    print("[INFO] Sending STUCK RECOVERY prompt to OpenCode...")
-                elif last_test_failed:
-                    print("[INFO] Sending FAILURE RECOVERY prompt to OpenCode...")
+                stdout_text, stderr_text = proc.communicate()
+                exit_code = proc.returncode
+            except Exception as e:
+                stderr_text = f"Subprocess execution error: {e}"
+                exit_code = 1
+
+            stdout_clean = redact_secrets(stdout_text)
+            stderr_clean = redact_secrets(stderr_text)
+
+            print(f"[*] Antigravity iteration {iteration} completed with exit code {exit_code}.")
+            if stdout_clean:
+                # Print a brief summary of stdout
+                preview = stdout_clean.strip().splitlines()
+                print("--- Agent Response Preview ---")
+                for line in preview[-8:]:
+                    print(f"  {line}")
+
+            # Reload updated state from STATE.md
+            state = AgentState.load(self.config.state_file)
+            state.iteration = iteration
+
+            # Run automated verification
+            verify_cmd = self.verifier.detect_command()
+            test_exit_code = None
+            test_output = None
+            test_passed = True
+
+            if verify_cmd:
+                print(f"[*] Running automated verification: {verify_cmd}")
+                state.status = STATUS_VERIFYING
+                state.save(self.config.state_file)
+
+                t_code, t_out, t_dur = self.verifier.run(verify_cmd)
+                test_exit_code = t_code
+                test_output = t_out
+                print(f"[*] Verification finished in {t_dur:.2f}s (Exit code: {t_code})")
+
+                if t_code != 0:
+                    test_passed = False
+                    print(f"[!] Verification FAILED (exit code {t_code}).")
+                    state.last_test_result = f"FAILED: {verify_cmd} (code {t_code})"
+                    state.current_problem = f"Automated verification failed:\n{t_out[:300]}"
+                    recovery_prompt_override = RECOVERY_VERIFICATION_PROMPT_TEMPLATE.format(
+                        test_output=t_out[:4000]
+                    )
                 else:
-                    print("[INFO] Sending STANDARD AUTONOMOUS prompt to OpenCode...")
+                    print("[+] Verification PASSED.")
+                    state.last_test_result = f"PASSED: {verify_cmd}"
+                    if state.current_problem.startswith("Automated verification failed"):
+                        state.current_problem = "None."
 
-                # Update State to IN_PROGRESS or VERIFYING
-                self.state_file.update(
-                    status="IN_PROGRESS",
-                    iteration=iteration,
-                    work="Executing OpenCode iteration.",
+            # Snapshot after iteration
+            snapshot_after = RepoSnapshot.capture(self.config.repo_root, self.git_mgr)
+
+            # Stuck Detection: Check if repository state changed
+            meaningful_progress = False
+            if snapshot_before["git_status"] != snapshot_after["git_status"]:
+                meaningful_progress = True
+            elif snapshot_before["files"] != snapshot_after["files"]:
+                meaningful_progress = True
+            elif snapshot_before["state_hash"] != snapshot_after["state_hash"]:
+                meaningful_progress = True
+            elif test_passed and test_exit_code is not None:
+                meaningful_progress = True
+
+            if meaningful_progress:
+                stuck_counter = 0
+            else:
+                stuck_counter += 1
+                print(f"[!] Warning: No meaningful progress detected in iteration {iteration} (stuck count: {stuck_counter}/{self.config.max_stuck_iterations}).")
+
+            # Check if stuck limit reached and recovery failed
+            if stuck_counter > self.config.max_stuck_iterations:
+                print(f"[!] Agent is stuck after {stuck_counter} iterations. Marking as BLOCKED.")
+                state.status = STATUS_BLOCKED
+                state.current_problem = "Agent stuck: no meaningful progress made across consecutive iterations."
+                state.save(self.config.state_file)
+                self.logger.write_iteration_log(
+                    iteration,
+                    iter_start,
+                    datetime.now(timezone.utc),
+                    cmd,
+                    stdout_clean,
+                    stderr_clean,
+                    exit_code,
+                    verify_cmd,
+                    test_output,
+                    test_exit_code,
+                    snapshot_before,
+                    snapshot_after,
                 )
+                return 2
 
-                # Execute OpenCode
-                is_first = (iteration == start_iter)
-                opencode_code, stdout, stderr, cmd_list, duration = self.runner.execute_iteration(
-                    prompt=prompt,
-                    is_first=is_first,
-                )
+            # Check Definition of Done
+            has_reqs, checked_dod, unchecked_dod = TaskChecker.inspect(self.config.task_file)
 
-                print(f"[INFO] OpenCode iteration finished in {duration:.1f}s (Exit code: {opencode_code})")
-                if stdout:
-                    print(f"[OUTPUT] {stdout.strip()[:300]}...")
+            # Completion Verification (Section 16)
+            is_complete = False
+            completion_reasons = []
 
-                # Run Automated Verification
-                test_cmd = self.test_detector.detect_command()
-                test_code, test_output = self.test_detector.run_verification(self.config.test_timeout_seconds)
+            agent_claimed_complete = (
+                "STATUS: COMPLETE" in stdout_clean.upper()
+                or "STATUS: COMPLETE" in state.status.upper()
+                or state.status == STATUS_COMPLETE
+            )
 
-                if test_code == 0:
-                    test_summary = "PASSED" if test_cmd else "Discretionary (no test suite)"
-                    last_test_failed = False
-                    last_test_output = ""
+            if agent_claimed_complete:
+                if unchecked_dod:
+                    print(f"[!] Agent reported completion, but {len(unchecked_dod)} Definition of Done items remain unchecked.")
+                    recovery_prompt_override = INCOMPLETE_DOD_PROMPT_TEMPLATE.format(
+                        unchecked_items="\n".join(f"- [ ] {item}" for item in unchecked_dod)
+                    )
+                    state.status = STATUS_IN_PROGRESS
+                elif not test_passed:
+                    print("[!] Agent reported completion, but automated verification failed.")
+                    state.status = STATUS_IN_PROGRESS
+                elif state.current_problem and state.current_problem.lower() not in ("none", "none.", ""):
+                    print(f"[!] Agent reported completion, but active problem documented: {state.current_problem}")
+                    state.status = STATUS_IN_PROGRESS
                 else:
-                    test_summary = f"FAILED (Exit code {test_code})"
-                    last_test_failed = True
-                    last_test_output = test_output
-                    print(f"[WARN] Automated tests failed:\n{test_output[:400]}")
+                    is_complete = True
+                    state.status = STATUS_COMPLETE
+                    print("\n[+] =================================================")
+                    print("[+] SUCCESS: Task is verified and COMPLETE!")
+                    print("[+] =================================================\n")
 
-                # Check Git & Repository state after iteration
-                git_after = self.git.status_short()
-                state_after_data = self.state_file.parse()
-                current_state_status = state_after_data.get("status", "IN_PROGRESS")
+            # Safe Git Checkpoint
+            if self.config.git_checkpoints and self.git_mgr.is_git:
+                if meaningful_progress:
+                    msg = state.current_work if state.current_work and state.current_work != "None." else "Progress milestone"
+                    if self.git_mgr.create_checkpoint(iteration, msg):
+                        print(f"[*] Safe Git checkpoint created for iteration {iteration}.")
 
-                # Update STATE.md test results if OpenCode didn't set them
-                self.state_file.update(
-                    iteration=iteration,
-                    last_test=test_summary,
-                )
+            # Save state
+            state.save(self.config.state_file)
 
-                reviewer_decision: Optional[ReviewerDecision] = None
-                active_reviewer = getattr(self, "reviewer", None) or getattr(self, "orchestrator", None)
-                if active_reviewer:
-                    task_text = (self.config.repo_root / "TASK.md").read_text(encoding="utf-8", errors="replace")
-                    plan_path = self.config.repo_root / "PLAN.md"
-                    state_text = self.state_file.read_text()
-                    plan_text = plan_path.read_text(encoding="utf-8", errors="replace") if plan_path.is_file() else ""
-                    evidence = (
-                        f"Controller verification command: {test_cmd or '(none detected)'}\n"
-                        f"Controller verification exit code: {test_code}\n"
-                        f"Controller verification output:\n{test_output or '(No automated suite detected.)'}\n"
-                        f"opencode exit code: {opencode_code}\nopencode stdout:\n{stdout}\nopencode stderr:\n{stderr}"
-                    )
-                    review_context = active_reviewer.collect_review_context(
-                        task_text, plan_text, state_text, evidence
-                    )
-                    try:
-                        reviewer_decision = active_reviewer.review(task_text, review_context)
-                    except ReviewerError as error:
-                        problem = f"Orchestrator review failed after retry: {error}"
-                        print(f"[ERROR] {problem}", file=sys.stderr)
-                        self.state_file.update(
-                            status="BLOCKED",
-                            iteration=iteration,
-                            problem=problem,
-                            next_action="Check ORCHESTRATOR_MODEL/VARIANT and opencode availability; then resume.",
-                            last_test=test_summary,
-                        )
-                        self.write_iteration_log(
-                            iteration=iteration,
-                            timestamp=iter_timestamp,
-                            status_before=status_before,
-                            git_before=git_before,
-                            cmd_list=cmd_list,
-                            opencode_code=opencode_code,
-                            duration=duration,
-                            stdout=stdout,
-                            stderr=stderr,
-                            test_cmd=test_cmd,
-                            test_code=test_code,
-                            test_output=test_output,
-                            git_after=git_after,
-                            state_after=self.state_file.read_text(),
-                        )
-                        return 1
+            # Write Iteration Log
+            iter_end = datetime.now(timezone.utc)
+            log_path = self.logger.write_iteration_log(
+                iteration,
+                iter_start,
+                iter_end,
+                cmd,
+                stdout_clean,
+                stderr_clean,
+                exit_code,
+                verify_cmd,
+                test_output,
+                test_exit_code,
+                snapshot_before,
+                snapshot_after,
+            )
+            print(f"[*] Iteration log saved to {log_path.name}")
 
-                    print(
-                        f"[REVIEWER] {reviewer_decision.verdict}: "
-                        f"{reviewer_decision.summary}"
-                    )
-                    agent_status = self.state_file.parse().get("status", "IN_PROGRESS")
-                    gated_status = reviewer_decision.gated_status(agent_status, test_code)
-                    if reviewer_decision.verdict == "needs_correction":
-                        gated_status = "IN_PROGRESS"
-                    self.state_file.update(
-                        status=gated_status,
-                        iteration=iteration,
-                        problem=(
-                            reviewer_decision.summary
-                            if reviewer_decision.verdict == "needs_correction"
-                            else ""
-                        ),
-                        next_action=(
-                            reviewer_decision.instructions
-                            if reviewer_decision.instructions
-                            else ("All requirements reviewed and verified." if gated_status == "COMPLETE" else None)
-                        ),
-                        last_test=test_summary,
-                    )
-                    reviewer_instruction = reviewer_decision.next_instruction()
-                    if reviewer_decision.verdict == "complete" and gated_status == "COMPLETE":
-                        print("[REVIEWER] Task approved complete after passing verification.")
-                    elif reviewer_decision.verdict == "complete" and test_code != 0:
-                        reviewer_instruction = (
-                            "The reviewer found the implementation complete, but the controller's "
-                            "verification failed. Fix the failing checks before claiming completion.\n"
-                            + reviewer_decision.summary
-                        )
+            if is_complete:
+                return 0
 
-                # Stuck Detection
-                is_stuck, stuck_count = self.stuck_detector.record_and_evaluate(
-                    git_status_before=git_before,
-                    git_status_after=git_after,
-                    state_data=state_after_data,
-                    test_code=test_code,
-                    opencode_code=opencode_code,
-                )
-
-                if is_stuck:
-                    if not stuck_in_recovery:
-                        print(f"[WARN] Loop appears stuck ({stuck_count} iterations without meaningful progress). Triggering recovery iteration.")
-                        stuck_in_recovery = True
-                    else:
-                        print(f"[ERROR] Loop remains stuck after recovery attempt ({stuck_count} iterations). Halting safely.")
-                        self.state_file.update(
-                            status="BLOCKED",
-                            iteration=iteration,
-                            problem=f"Stuck after {stuck_count} consecutive iterations without progress.",
-                            next_action="Human intervention required to inspect blockers.",
-                        )
-                        # Log iteration before returning
-                        self.write_iteration_log(
-                            iteration=iteration,
-                            timestamp=iter_timestamp,
-                            status_before=status_before,
-                            git_before=git_before,
-                            cmd_list=cmd_list,
-                            opencode_code=opencode_code,
-                            duration=duration,
-                            stdout=stdout,
-                            stderr=stderr,
-                            test_cmd=test_cmd,
-                            test_code=test_code,
-                            test_output=test_output,
-                            git_after=git_after,
-                            state_after=self.state_file.read_text(),
-                            reviewer_decision=reviewer_decision,
-                        )
-                        return 1
-                else:
-                    stuck_in_recovery = False
-
-                # Write Iteration Log
-                log_path = self.write_iteration_log(
-                    iteration=iteration,
-                    timestamp=iter_timestamp,
-                    status_before=status_before,
-                    git_before=git_before,
-                    cmd_list=cmd_list,
-                    opencode_code=opencode_code,
-                    duration=duration,
-                    stdout=stdout,
-                    stderr=stderr,
-                    test_cmd=test_cmd,
-                    test_code=test_code,
-                    test_output=test_output,
-                    git_after=git_after,
-                    state_after=self.state_file.read_text(),
-                    reviewer_decision=reviewer_decision,
-                )
-                print(f"[INFO] Log saved to {log_path.name}")
-
-                # Milestone Checkpoint
-                if test_code == 0 and git_after:
-                    if self.git.create_checkpoint(iteration, f"milestone tests passing"):
-                        print(f"[INFO] Git checkpoint commit created for iteration {iteration:03d}.")
-
-                # Check completion through the orchestrator gate when enabled.
-                final_state_status = self.state_file.parse().get("status", "IN_PROGRESS")
-                if final_state_status == "COMPLETE":
-                    if test_code == 0:
-                        print("\n" + "=" * 60)
-                        print("🎉 TASK COMPLETE! All verification checks passed.")
-                        print("=" * 60)
-                        return 0
-                    else:
-                        print("[WARN] Agent set Status: COMPLETE, but automated verification failed. Continuing to verify.")
-                        self.state_file.update(status="VERIFYING")
-
-                # Check if Agent declared BLOCKED
-                if final_state_status == "BLOCKED":
-                    print(f"\n[STOP] Agent requested human intervention (BLOCKED): {self.state_file.parse().get('problem')}")
-                    return 1
-
-            print(f"\n[STOP] Reached maximum iterations ({self.config.max_iterations}). Stopping safely.")
-            return 0
-
-        finally:
-            self.runner.shutdown_server()
+        # Loop finished without completion
+        print(f"\n[!] Reached maximum iterations ({self.config.max_iterations}) without task completion.")
+        state.status = STATUS_BLOCKED
+        state.current_problem = f"Reached maximum iterations ({self.config.max_iterations})."
+        state.save(self.config.state_file)
+        return 1
 
 
-def parse_arguments() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Autonomous OpenCode Agent Controller")
-    parser.add_argument("--dry-run", action="store_true", help="Show what would happen without executing iterations")
-    parser.add_argument("--status", action="store_true", help="Display current agent status from STATE.md and git")
-    parser.add_argument("--resume", action="store_true", help="Resume from current STATE.md instead of starting fresh")
-    parser.add_argument("--max-iterations", type=int, help=f"Max autonomous iterations (default: {DEFAULT_MAX_ITERATIONS})")
-    parser.add_argument("--max-runtime", type=int, help=f"Max runtime in seconds (default: {DEFAULT_MAX_RUNTIME_SECONDS})")
-    parser.add_argument("--test-cmd", type=str, help="Override automated test command")
-    parser.add_argument("--model", type=str, help="Override OpenCode worker model (provider/model)")
-    parser.add_argument("--variant", type=str, help="Override OpenCode worker model variant (e.g. high, max)")
-    parser.add_argument("--orchestrator-model", type=str, default=None, help="Orchestrator model for review (same OpenCode CLI, different model)")
-    parser.add_argument("--orchestrator-variant", type=str, default=None, help="Orchestrator model variant (e.g. high, max)")
-    parser.add_argument("--persistent-server", action="store_true", help="Use or start persistent OpenCode server")
+# =====================================================================
+# CLI Entrypoint
+# =====================================================================
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Autonomous Coding-Agent Controller for Antigravity CLI",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument("--dry-run", action="store_true", help="Show commands and prompts without executing")
+    parser.add_argument("--status", action="store_true", help="Display current STATE.md and progress")
+    parser.add_argument("--resume", action="store_true", help="Resume from existing STATE.md")
+    parser.add_argument("--max-iterations", type=int, help="Maximum autonomous iterations to run")
+    parser.add_argument("--max-runtime", type=int, dest="max_runtime_seconds", help="Maximum runtime in seconds")
+    parser.add_argument("--test-timeout", type=int, dest="test_timeout_seconds", help="Test timeout in seconds")
+    parser.add_argument("--max-stuck", type=int, dest="max_stuck_iterations", help="Max consecutive stuck iterations")
+    parser.add_argument("--verify-cmd", type=str, help="Custom verification command to run")
+    parser.add_argument("--no-session", action="store_false", dest="use_session", help="Disable Antigravity session continuation (-c)")
+    parser.add_argument("--no-git-checkpoints", action="store_false", dest="git_checkpoints", help="Disable automatic git checkpoints")
     return parser.parse_args()
 
 
-def resolve_repo_root() -> Path:
-    """Resolve repository root by looking for TASK.md or .git upwards from this script."""
-    current = Path(__file__).resolve().parent
-    for parent in [current] + list(current.parents):
+def main() -> int:
+    args = parse_args()
+
+    # Resolve repo root: find ancestor containing TASK.md or .git or fallback to current working directory
+    cwd = Path.cwd().resolve()
+    repo_root = cwd
+    for parent in [cwd] + list(cwd.parents):
         if (parent / "TASK.md").is_file() or (parent / ".git").is_dir():
-            return parent
-    return Path.cwd().resolve()
+            repo_root = parent
+            break
 
-
-def main() -> None:
-    args = parse_arguments()
-    repo_root = resolve_repo_root()
-    config = ControllerConfig.from_args(repo_root, args)
+    config = Config.load(repo_root=repo_root, args=args)
     controller = AutonomousController(config)
-    exit_code = controller.run()
-    sys.exit(exit_code)
+    return controller.run()
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

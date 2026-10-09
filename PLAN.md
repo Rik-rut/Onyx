@@ -1,8 +1,90 @@
 # Implementation Plan
 
-Status: COMPLETE (no-API-key migration)
+Status: COMPLETE (All core requirements and Interactive CLI Mode verified)
 
-## Architecture Decision: No API Keys
+## Phase 2 (Completed): Interactive CLI Application (R14)
+
+### Architecture Decision: Interactive CLI Mode via `rich`
+- **Objective**: Transform `run.bat` into a full interactive CLI app when launched without arguments (or with `arr interactive`).
+- **Core Tooling**: Use `rich` (already present in `pyproject.toml`) for console layout, panels, tables, prompts, and status indicators.
+- **Backward Compatibility**: Keep non-interactive CLI flags working identically when arguments are provided to `run.bat` (e.g. `run.bat search movie "Inception"`).
+- **Separation of Concerns**: Created `src/arr/interactive/` with dedicated modules for UI components, TV flow, Movie flow, Queue flow, Daemon status, Config view, and Series management flow, keeping `src/arr/pipeline.py` and `src/arr/cli.py` clean.
+
+### Phase 2 Implementation Steps (All Completed & Verified)
+
+1. **Created `src/arr/interactive/ui.py`**:
+   - Reusable Rich console, header banners, styling themes.
+   - Formatted release results table (`render_releases_table`).
+   - Formatted queue and torrent status table (`render_queue_table`).
+   - Formatted monitored series table (`render_series_table`).
+   - Prompt helper functions: text prompt with back/cancel support, choice prompt with validation, confirmation prompt.
+
+2. **Created `src/arr/interactive/tv.py`**:
+   - Interactive TV search prompt.
+   - TVMaze resolution & show overview panel (title, year, premiered, status, season count, episode count).
+   - Scope selector:
+     - `1`: Entire series (all seasons, season-pack priority)
+     - `2`: Specific season (prompt for season number)
+     - `3`: Specific episode (prompt for season & episode)
+     - `4`: Direct indexer query (bypass TVMaze)
+   - Search indexers, rank results, render Rich results table.
+   - Release selector: pick index `[0-N]`, `auto`, `explain <#>`, or `b` (back).
+   - Enqueue and kick off download via Transmission RPC; show live feedback.
+
+3. **Created `src/arr/interactive/movie.py`**:
+   - Interactive movie search prompt.
+   - IMDb resolution (title, year, IMDb ID).
+   - Search indexers, rank results, render Rich results table.
+   - Release selector: pick index `[0-N]`, `auto`, `explain <#>`, or `b` (back).
+   - Enqueue and kick off download via Transmission RPC.
+
+4. **Created `src/arr/interactive/queue.py`**:
+   - Pull active downloads and transmission torrents.
+   - Render styled status table with progress %, state, speed, and ETA.
+   - Submenu: refresh view, cancel download (optional delete), manual import.
+
+5. **Created `src/arr/interactive/series.py`**:
+   - List monitored series from database with status and missing episode counts.
+   - Add new series to monitoring (search TVMaze, save to DB, initial download).
+   - Force check episodes (`series check`).
+   - Remove series (optional file deletion).
+
+6. **Created `src/arr/interactive/daemon_view.py` & `src/arr/interactive/config_view.py`**:
+   - Transmission daemon status view, connection health check, and binary diagnostics.
+   - Configuration viewer displaying active settings and redacted values.
+
+7. **Created `src/arr/interactive/app.py` & `src/arr/interactive/__init__.py`**:
+   - Main menu loop:
+     - [1] Search & Download TV Shows
+     - [2] Search & Download Movies
+     - [3] Manage Monitored Series
+     - [4] Queue & Active Downloads
+     - [5] Transmission Daemon Status
+     - [6] Configuration & Settings
+     - [0] Exit
+   - Graceful `KeyboardInterrupt` handling.
+
+8. **Wired CLI Entry Point (`src/arr/cli.py`)**:
+   - Registered `@app.command("interactive")`.
+   - Updated `@app.callback(invoke_without_command=True)` to run interactive mode when invoked without a subcommand.
+
+9. **Updated Launchers (`run.bat` & `run.sh`)**:
+   - In `run.bat`, updated no-argument execution to run `"%UV%" run arr interactive` and retain exit code.
+   - In `run.sh`, updated no-argument execution to run `uv run arr interactive`.
+
+10. **Automated Tests (`tests/test_interactive.py`)**:
+    - 15 unit and integration tests verifying navigation, TV flow, Movie flow, Queue flow, Daemon status, Config view, and graceful exit.
+    - Verified table generation with various releases.
+    - Verified error recovery on invalid choices and keyboard interrupts.
+
+11. **Full Verification**:
+    - `uv run pytest` (129 passed, 1 deselected; 1 real daemon integration test passed).
+    - `uv run ruff check .` and `uv run mypy arr` pass with zero errors across 44 files.
+    - Smoke tested `echo 0 | run.bat` exiting 0.
+
+---
+
+## Phase 1 (Completed): Architecture Decision: No API Keys
 
 **Decision**: Remove TMDB and OpenSubtitles entirely. Replace with:
 - **TVMaze** (free REST API, no auth) for TV metadata
