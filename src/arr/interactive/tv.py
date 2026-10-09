@@ -9,10 +9,15 @@ from arr.core.models import MediaType
 from arr.core.parsing import explain
 from arr.interactive.ui import (
     console,
+    live_monitor_downloads,
+    parse_episode_selection,
     print_header,
     prompt_confirm,
     prompt_text,
+    render_episodes_table,
+    render_matches_table,
     render_releases_table,
+    render_seasons_table,
 )
 from arr.metadata.tvmaze import TvmazeClient, TvmazeError
 from arr.pipeline import enqueue_release, search_candidates
@@ -24,7 +29,7 @@ if TYPE_CHECKING:
 
 
 def interactive_tv(cfg: Config, c: Console | None = None) -> None:
-    """Interactive TV show search, scope selection, release ranking, and download flow."""
+    """Interactive TV show search, close matches selection, and live progress monitor."""
     target = c or console
     print_header(
         "Search & Download TV Shows",
@@ -36,20 +41,61 @@ def interactive_tv(cfg: Config, c: Console | None = None) -> None:
     if not query:
         return
 
-    # 1. Metadata resolution via TVMaze
+    # 1. Metadata resolution via TVMaze (support close matches)
     target.print(f"[cyan]Searching TVMaze for '{query}'...[/cyan]")
     tvm = TvmazeClient(cfg)
-    series_info = None
+    matches: list[dict] = []
     try:
-        raw = tvm.search_tv(query)
-        if raw:
-            series_info = tvm.full_series(raw["id"])
-    except TvmazeError as e:
-        target.print(f"[yellow]TVMaze lookup failed ({e}); falling back to direct search.[/yellow]")
+        matches = tvm.search_tv_shows(query)
+    except Exception:
+        pass
+    if not matches:
+        try:
+            s = tvm.search_tv(query)
+            if s:
+                matches = [s]
+        except Exception:
+            pass
+
+    chosen_match: dict | None = None
+    if len(matches) > 1:
+        target.print(render_matches_table(matches, "TV Show", target))
+        while True:
+            m_choice = prompt_text(
+                f"Select TV show [0-{len(matches)-1}] or 'b' to go back",
+                default="0",
+                allow_back=True,
+                c=target,
+            )
+            if not m_choice or m_choice.lower() in ("b", "back"):
+                return
+            if m_choice.isdigit() and 0 <= int(m_choice) < len(matches):
+                chosen_match = matches[int(m_choice)]
+                break
+            target.print(f"[red]Invalid selection. Enter 0 to {len(matches)-1}.[/red]")
+    elif len(matches) == 1:
+        chosen_match = matches[0]
+
+    series_info = None
+    seasons: list[dict] = []
+    if chosen_match and chosen_match.get("id"):
+        try:
+            series_info = tvm.full_series(int(chosen_match["id"]))
+            seasons = tvm.seasons_overview(int(chosen_match["id"]), series=series_info)
+        except TvmazeError as e:
+            target.print(
+                f"[yellow]TVMaze lookup failed ({e}); falling back to direct search.[/yellow]"
+            )
 
     show_title = query
     tmdb_id = None
     imdb_id = None
+
+    if chosen_match:
+        show_title = chosen_match.get("title") or chosen_match.get("name") or query
+        tmdb_id = chosen_match.get("id")
+        ext = chosen_match.get("externals") or {}
+        imdb_id = ext.get("imdb")
 
     if series_info:
         show_title = series_info.title
@@ -64,15 +110,27 @@ def interactive_tv(cfg: Config, c: Console | None = None) -> None:
             f"[cyan]Total Episodes:[/cyan] {total_episodes}"
         )
         target.print(Panel(overview, title="TVMaze Show Details", border_style="green"))
+    elif chosen_match:
+        target.print(
+            Panel(
+                f"[bold white]{show_title}[/bold white]",
+                title="TVMaze Show Match",
+                border_style="green",
+            )
+        )
     else:
         target.print(
             f"[yellow]No TVMaze show found for '{query}'. Proceeding with direct search.[/yellow]"
         )
 
+    # Display seasons overview table with status (Completed, Ongoing, Upcoming)
+    if seasons:
+        target.print(render_seasons_table(seasons, target))
+
     # 2. Scope Selection
     target.print("\n[bold]Select Download Scope:[/bold]")
     target.print("  [1] Entire series (all seasons, season-pack priority)")
-    target.print("  [2] Specific season")
+    target.print("  [2] Specific season (browse seasons & select episodes)")
     target.print("  [3] Specific episode")
     target.print("  [4] Direct indexer query (raw search)")
     target.print("  [b] Back to Main Menu")
@@ -110,6 +168,8 @@ def interactive_tv(cfg: Config, c: Console | None = None) -> None:
                 target.print(
                     "[bold green]Entire series enqueued! Check queue for progress.[/bold green]"
                 )
+                if prompt_confirm("Monitor download progress live?", default=False, c=target):
+                    live_monitor_downloads(cfg, target, auto_exit_when_done=True)
             except SystemExit as e:
                 if e.code == 3:
                     target.print(
@@ -135,7 +195,111 @@ def interactive_tv(cfg: Config, c: Console | None = None) -> None:
             target.print("[yellow]Invalid season number.[/yellow]")
             return
         season_num = int(s_input)
-        target.print(f"[cyan]Searching Season {season_num} for '{show_title}'...[/cyan]")
+
+        matched_season = (
+            next((s for s in series_info.seasons if s.season_number == season_num), None)
+            if series_info
+            else None
+        )
+
+        if matched_season and matched_season.episodes:
+            target.print(render_episodes_table(matched_season.episodes, target))
+            target.print("\n[bold]Season Download Options:[/bold]")
+            target.print("  [1] Download entire season (season pack)")
+            target.print("  [2] Select specific episode(s)")
+            target.print("  [b] Back to Main Menu")
+
+            s_opt = prompt_text("Choose option", default="1", allow_back=True, c=target)
+            if not s_opt:
+                return
+
+            if s_opt in ("2", "episodes"):
+                ep_text = prompt_text(
+                    f"Select episode(s) (e.g. '1', '1, 3, 5', '1-4', 'all' "
+                    f"[max {len(matched_season.episodes)}])",
+                    allow_back=True,
+                    c=target,
+                )
+                if not ep_text:
+                    return
+                try:
+                    selected_eps = parse_episode_selection(
+                        ep_text, max_ep=len(matched_season.episodes)
+                    )
+                except ValueError as err:
+                    target.print(f"[red]Invalid selection: {err}[/red]")
+                    return
+
+                if len(selected_eps) == 1:
+                    episode_num = selected_eps[0]
+                    target.print(
+                        f"[cyan]Searching S{season_num:02d}E{episode_num:02d} "
+                        f"for '{show_title}'...[/cyan]"
+                    )
+                else:
+                    # Multi-episode download
+                    target.print(
+                        f"\n[bold]Selected {len(selected_eps)} episodes:[/bold] "
+                        + ", ".join(f"E{e:02d}" for e in selected_eps)
+                    )
+                    if not prompt_confirm(
+                        "Start download for selected episodes?", default=True, c=target
+                    ):
+                        target.print("[dim]Episode download cancelled.[/dim]")
+                        return
+
+                    target.print(
+                        f"[cyan]Searching and enqueuing {len(selected_eps)} episodes...[/cyan]"
+                    )
+                    enqueued_count = 0
+                    for ep_n in selected_eps:
+                        try:
+                            rel_list, _, _ = asyncio.run(
+                                search_candidates(
+                                    MediaType.TV,
+                                    show_title,
+                                    cfg,
+                                    season=season_num,
+                                    episode=ep_n,
+                                )
+                            )
+                            if rel_list:
+                                best = rel_list[0]
+                                ok, msg = asyncio.run(
+                                    enqueue_release(
+                                        best,
+                                        cfg,
+                                        media_type="tv",
+                                        season=season_num,
+                                        episode=ep_n,
+                                        tmdb_id=tmdb_id,
+                                        imdb_id=imdb_id,
+                                    )
+                                )
+                                if ok:
+                                    target.print(f"[green]✓ E{ep_n:02d}: {best.title[:60]}[/green]")
+                                    enqueued_count += 1
+                                else:
+                                    target.print(f"[yellow]! E{ep_n:02d}: {msg}[/yellow]")
+                            else:
+                                target.print(f"[yellow]✗ E{ep_n:02d}: No releases found[/yellow]")
+                        except Exception as ex:
+                            target.print(f"[red]✗ E{ep_n:02d}: Error ({ex})[/red]")
+
+                    target.print(
+                        f"[bold green]Enqueued {enqueued_count}/"
+                        f"{len(selected_eps)} episodes.[/bold green]"
+                    )
+                    if enqueued_count > 0 and prompt_confirm(
+                        "Monitor download progress live?", default=False, c=target
+                    ):
+                        live_monitor_downloads(cfg, target, auto_exit_when_done=True)
+                    prompt_text("Press Enter to continue", allow_back=False, c=target)
+                    return
+            else:
+                target.print(f"[cyan]Searching Season {season_num} for '{show_title}'...[/cyan]")
+        else:
+            target.print(f"[cyan]Searching Season {season_num} for '{show_title}'...[/cyan]")
 
     elif scope_choice == "3":
         s_input = prompt_text("Enter season number (e.g. 1)", allow_back=True, c=target)
@@ -251,6 +415,10 @@ def interactive_tv(cfg: Config, c: Console | None = None) -> None:
         )
         if ok:
             target.print(f"[bold green]{msg}! Infohash: {chosen.infohash[:10]}[/bold green]")
+            if prompt_confirm("Monitor download progress live?", default=False, c=target):
+                live_monitor_downloads(
+                    cfg, target, single_hash=chosen.infohash, auto_exit_when_done=True
+                )
         else:
             target.print(f"[bold red]{msg}[/bold red]")
     else:

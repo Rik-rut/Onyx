@@ -32,6 +32,7 @@ from arr.transmission.errors import DependencyUnavailable, RpcError
 from arr.transmission.process import (
     RpcClient,
     active_count,
+    ensure_daemon,
     is_active_torrent,
     is_complete_torrent,
     plan_slots,
@@ -47,6 +48,10 @@ def _db(cfg: Config) -> DB:
 
 
 def _rpc(cfg: Config) -> RpcClient:
+    try:
+        ensure_daemon(cfg)
+    except DependencyUnavailable:
+        pass
     return RpcClient(
         str(cfg.get("transmission_rpc_host", "127.0.0.1")),
         int(cfg.get("transmission_rpc_port", 9091)),
@@ -55,15 +60,17 @@ def _rpc(cfg: Config) -> RpcClient:
     )
 
 
+
 def _library_root(cfg: Config) -> Path:
-    return Path(str(cfg.get("library_root", "downloads")))
+    return Path(str(cfg.get("library_root", "downloads"))).resolve()
 
 
 def _staging_dir(cfg: Config, media_type: str) -> Path:
     sub = "movies" if media_type == "movie" else "tv-shows"
-    d = Path(str(cfg.get("download_root", "downloads"))) / sub / ".incomplete"
+    d = Path(str(cfg.get("download_root", "downloads"))).resolve() / sub
     d.mkdir(parents=True, exist_ok=True)
     return d
+
 
 
 def _torrent_content_path(torrent: dict | None) -> Path | None:
@@ -86,7 +93,7 @@ def _import_mode(cfg: Config) -> str:
 def _print_hardlink_notice(cfg: Config, count: int = 1) -> None:
     if _import_mode(cfg) == "hardlink":
         notice = (
-            "Note: importing via hardlink keeps torrent data in .incomplete/ so seeding "
+            "Note: importing via hardlink keeps torrent data in place so seeding "
             "can continue (the library shares the same blocks)."
         )
         suffix = f" ({count} torrents)" if count > 1 else ""
@@ -741,8 +748,8 @@ def _resolve_content(rec: dict) -> Path | None:
     """Path to import from, or None if it can't be determined safely.
 
     Prefers the per-torrent `content_path` recorded from the daemon. Falls back
-    to `download_dir` only when that is *not* the shared `.incomplete/` staging
-    dir, since importing the staging root would mix every torrent's files.
+    to `download_dir` only when that is *not* a shared staging or library root,
+    since importing the staging root would mix every torrent's files.
     """
     cp = rec.get("content_path")
     if cp:
@@ -751,7 +758,12 @@ def _resolve_content(rec: dict) -> Path | None:
     if not dd:
         return None
     p = Path(str(dd))
-    if p.name == ".incomplete":
+    if p.name in (".incomplete", "movies", "tv-shows"):
+        title = rec.get("title")
+        if title:
+            candidate = p / title
+            if candidate.exists():
+                return candidate
         return None
     return p
 

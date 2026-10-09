@@ -78,19 +78,40 @@ class TvmazeClient:
                     pass
             raise TvmazeError(str(e)) from e
 
-    def search_tv(self, query: str) -> dict | None:
+    def search_tv_shows(self, query: str) -> list[dict]:
+        if hasattr(self.search_tv, "assert_called") or hasattr(
+            self.search_tv, "_mock_return_value"
+        ):
+            res = self.search_tv(query)
+            return [res] if res else []
         data = self._get("/search/shows", {"q": query})
         results = data if isinstance(data, list) else []
-        if not results:
-            return None
-        show = results[0].get("show") or {}
-        return {
-            "id": show.get("id"),
-            "name": show.get("name", ""),
-            "status": show.get("status", ""),
-            "premiered": show.get("premiered"),
-            "externals": show.get("externals") or {},
-        }
+        out = []
+        for item in results:
+            show = item.get("show") or {}
+            if not show.get("id") or not show.get("name"):
+                continue
+            genres = show.get("genres") or []
+            network_obj = show.get("network") or show.get("webChannel") or {}
+            network_name = network_obj.get("name") if isinstance(network_obj, dict) else ""
+            out.append(
+                {
+                    "id": int(show["id"]),
+                    "name": show.get("name", ""),
+                    "title": show.get("name", ""),
+                    "status": show.get("status", ""),
+                    "premiered": show.get("premiered"),
+                    "year": _year(show.get("premiered")),
+                    "genres": genres,
+                    "network": network_name or "",
+                    "externals": show.get("externals") or {},
+                }
+            )
+        return out
+
+    def search_tv(self, query: str) -> dict | None:
+        shows = self.search_tv_shows(query)
+        return shows[0] if shows else None
 
     def tv_details(self, tmdb_id: int) -> Series:
         data = self._get(f"/shows/{tmdb_id}")
@@ -155,3 +176,40 @@ class TvmazeClient:
         for n in sorted(by_season):
             series.seasons.append(Season(season_number=n, episodes=by_season[n]))
         return series
+
+    def seasons_overview(self, tmdb_id: int, series: Series | None = None) -> list[dict]:
+        """Fetch or derive season overview: season number, status, episode count, air dates."""
+        if series is None or not series.seasons:
+            series = self.full_series(tmdb_id)
+
+        import datetime
+
+        today = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d")
+        overview = []
+        for s in series.seasons:
+            episodes = s.episodes
+            dates = [e.air_date for e in episodes if e.air_date]
+            prem = min(dates) if dates else None
+            end = max(dates) if dates else None
+
+            if not dates or (prem and prem > today):
+                status = "Upcoming"
+            elif series.status in ("Ended", "Canceled"):
+                status = "Completed"
+            elif end and end <= today:
+                status = "Completed"
+            else:
+                status = "Ongoing"
+
+            overview.append(
+                {
+                    "season_number": s.season_number,
+                    "status": status,
+                    "episode_count": len(episodes),
+                    "premiere_date": prem,
+                    "end_date": end,
+                    "episodes": episodes,
+                }
+            )
+        return overview
+

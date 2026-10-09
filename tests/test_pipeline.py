@@ -452,3 +452,17 @@ def test_series_remove_delete_files(tmp_path, monkeypatch):
     db2 = pipeline._db(cfg)
     assert db2.list_monitored() == []
     db2.close()
+
+
+def test_staging_dir_direct_destination_no_incomplete(tmp_path):
+    cfg = make_cfg(tmp_path)
+    movie_dir = pipeline._staging_dir(cfg, "movie")
+    tv_dir = pipeline._staging_dir(cfg, "tv")
+
+    assert ".incomplete" not in movie_dir.parts
+    assert ".incomplete" not in tv_dir.parts
+    assert movie_dir.name == "movies"
+    assert tv_dir.name == "tv-shows"
+    assert movie_dir.exists()
+    assert tv_dir.exists()
+

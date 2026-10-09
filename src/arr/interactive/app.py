@@ -26,11 +26,29 @@ def run_interactive(cfg: Config, c: Console | None = None) -> int:
     """Run the main interactive CLI terminal application."""
     target = c or console
 
+    # Auto-start or ensure transmission-daemon is running on local machine
+    try:
+        from arr.transmission.process import ensure_daemon
+
+        ensure_daemon(cfg)
+    except Exception:
+        pass
+
     while True:
         try:
             print_banner(target)
 
+            from arr.transmission.process import port_in_use
+
+            port = int(cfg.get("transmission_rpc_port", 9091))
+            status_indicator = (
+                f"[bold green]● Transmission Online (port {port})[/bold green]"
+                if port_in_use(port, timeout=0.1)
+                else "[yellow]○ Transmission Offline[/yellow]"
+            )
+
             menu_text = (
+                f"{status_indicator}\n\n"
                 "[bold white][1][/bold white] Search & Download TV Shows\n"
                 "[bold white][2][/bold white] Search & Download Movies\n"
                 "[bold white][3][/bold white] Manage Monitored Series\n"
@@ -40,6 +58,7 @@ def run_interactive(cfg: Config, c: Console | None = None) -> int:
                 "[bold white][0][/bold white] Exit"
             )
             target.print(Panel(menu_text, title="Main Menu", border_style="cyan", padding=(1, 2)))
+
 
             choice = prompt_text("Select an option [0-6]", allow_back=False, c=target)
             if choice is None:

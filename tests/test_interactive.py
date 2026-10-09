@@ -21,13 +21,19 @@ from arr.interactive.ui import (
     format_eta,
     format_size,
     format_speed,
+    live_monitor_downloads,
+    make_progress_bar,
+    parse_episode_selection,
     print_banner,
     print_header,
     prompt_choice,
     prompt_confirm,
     prompt_text,
+    render_episodes_table,
+    render_matches_table,
     render_queue_table,
     render_releases_table,
+    render_seasons_table,
     render_series_table,
 )
 
@@ -99,6 +105,92 @@ def test_format_helpers():
     assert format_eta(150) == "2m 30s"
     assert format_eta(3720) == "1h 02m"
     assert format_eta(90000) == "1d 1h"
+
+    # Progress bar
+    assert make_progress_bar(0.0) == "[░░░░░░░░░░] 0.0%"
+    assert make_progress_bar(78.4) == "[████████░░] 78.4%"
+    assert make_progress_bar(100.0) == "[██████████] 100.0%"
+
+
+def test_parse_episode_selection():
+    assert parse_episode_selection("1") == [1]
+    assert parse_episode_selection(" 04 ") == [4]
+    assert parse_episode_selection("1, 3, 5") == [1, 3, 5]
+    assert parse_episode_selection("1-4") == [1, 2, 3, 4]
+    assert parse_episode_selection("1-3, 5, 8-10") == [1, 2, 3, 5, 8, 9, 10]
+    assert parse_episode_selection("all", max_ep=5) == [1, 2, 3, 4, 5]
+
+    with pytest.raises(ValueError, match="empty"):
+        parse_episode_selection("")
+
+    with pytest.raises(ValueError, match="greater than 0"):
+        parse_episode_selection("0")
+
+    with pytest.raises(ValueError, match="Invalid"):
+        parse_episode_selection("abc")
+
+    with pytest.raises(ValueError, match="cannot exceed"):
+        parse_episode_selection("5-2")
+
+    with pytest.raises(ValueError, match="exceeds maximum"):
+        parse_episode_selection("15", max_ep=10)
+
+
+def test_render_new_tables(mock_console):
+    # Matches table
+    matches = [
+        {"id": 1, "name": "Show A", "year": 2021, "status": "Ended", "network": "HBO"},
+        {
+            "id": 2,
+            "name": "Show B",
+            "year": 2022,
+            "status": "Running",
+            "genres": ["Action", "Sci-Fi"],
+        },
+    ]
+    t1 = render_matches_table(matches, "TV Show", mock_console)
+    mock_console.print(t1)
+    out1 = mock_console.export_text()
+    assert "Show A" in out1
+    assert "HBO" in out1
+    assert "Show B" in out1
+
+    # Seasons table
+    mock_console._record_buffer.clear()
+    seasons = [
+        {
+            "season_number": 1,
+            "status": "Completed",
+            "episode_count": 10,
+            "premiere_date": "2021-01-01",
+            "end_date": "2021-03-01",
+        },
+        {
+            "season_number": 2,
+            "status": "Ongoing",
+            "episode_count": 8,
+            "premiere_date": "2023-01-01",
+            "end_date": None,
+        },
+    ]
+    t2 = render_seasons_table(seasons, mock_console)
+    mock_console.print(t2)
+    out2 = mock_console.export_text()
+    assert "Season 01" in out2
+    assert "Completed" in out2
+    assert "Ongoing" in out2
+
+    # Episodes table
+    mock_console._record_buffer.clear()
+    episodes = [
+        {"episode_number": 1, "name": "Pilot", "air_date": "2021-01-01"},
+        {"episode_number": 2, "name": "Second", "air_date": "2021-01-08"},
+    ]
+    t3 = render_episodes_table(episodes, mock_console)
+    mock_console.print(t3)
+    out3 = mock_console.export_text()
+    assert "E01" in out3
+    assert "Pilot" in out3
 
 
 def test_render_tables(mock_console):
@@ -465,3 +557,118 @@ def test_cli_interactive_command():
         result = runner.invoke(app, ["interactive"])
         assert result.exit_code == 0
         mock_interactive.assert_called_once()
+
+
+# =====================================================================
+# R15 Enhanced Interactive Flow Tests
+# =====================================================================
+def test_interactive_tv_flow_multi_match_selection(test_cfg, mock_console):
+    s = sample_series()
+    matches = [
+        {"id": 101, "name": "Other Show", "year": 2010, "status": "Ended"},
+        {"id": 123, "name": "Breaking Code", "year": 2022, "status": "Returning Series"},
+    ]
+    with (
+        patch("arr.metadata.tvmaze.TvmazeClient.search_tv_shows", return_value=matches),
+        patch("arr.metadata.tvmaze.TvmazeClient.full_series", return_value=s),
+        patch("arr.metadata.tvmaze.TvmazeClient.seasons_overview", return_value=[]),
+        patch("arr.interactive.tv.prompt_text", side_effect=["Breaking", "1", "1", ""]),
+        patch("arr.interactive.tv.prompt_confirm", return_value=True),
+        patch("arr.pipeline.download_tv", new_callable=AsyncMock) as mock_dt,
+    ):
+        interactive_tv(test_cfg, mock_console)
+        mock_dt.assert_called_once()
+        out = mock_console.export_text()
+        assert "Breaking Code" in out
+        assert "Entire series enqueued" in out
+
+
+def test_interactive_tv_flow_multi_episode_selection(test_cfg, mock_console):
+    from arr.core.models import Episode
+
+    s = sample_series()
+    s.seasons[0].episodes = [
+        Episode(tmdb_id=123, season_number=1, episode_number=1, name="Pilot"),
+        Episode(tmdb_id=123, season_number=1, episode_number=2, name="Second"),
+    ]
+    rel1 = sample_release(1)
+    rel1.media_type = MediaType.TV
+    scored1 = Scored(release=rel1, score={"seeders": 100})
+    q1 = Query(media_type=MediaType.TV, text="Breaking Code", season=1, episode=1)
+
+    with (
+        patch(
+            "arr.metadata.tvmaze.TvmazeClient.search_tv_shows",
+            return_value=[{"id": 123, "name": "Breaking Code"}],
+        ),
+        patch("arr.metadata.tvmaze.TvmazeClient.full_series", return_value=s),
+        patch("arr.metadata.tvmaze.TvmazeClient.seasons_overview", return_value=[]),
+        patch(
+            "arr.interactive.tv.prompt_text",
+            side_effect=["Breaking Code", "2", "1", "2", "1-2", ""],
+        ),
+        patch(
+            "arr.interactive.tv.search_candidates",
+            new_callable=AsyncMock,
+            return_value=([rel1], [scored1], q1),
+        ),
+        patch("arr.interactive.tv.prompt_confirm", return_value=True),
+        patch(
+            "arr.interactive.tv.enqueue_release",
+            new_callable=AsyncMock,
+            return_value=(True, "Started downloading"),
+        ) as mock_enq,
+    ):
+        interactive_tv(test_cfg, mock_console)
+        assert mock_enq.call_count == 2
+        out = mock_console.export_text()
+        assert "Enqueued 2/2 episodes" in out
+
+
+def test_interactive_movie_flow_multi_match_selection(test_cfg, mock_console):
+    rel = sample_release(0)
+    score_dict = {"seeders": 150}
+    scored = Scored(release=rel, score=score_dict)
+    q = Query(media_type=MediaType.MOVIE, text="Batman", title="Batman Begins", year=2005)
+
+    matches = [
+        {"id": "tt0096895", "title": "Batman", "year": 1989, "imdb_id": "tt0096895"},
+        {"id": "tt0372784", "title": "Batman Begins", "year": 2005, "imdb_id": "tt0372784"},
+    ]
+    with (
+        patch("arr.metadata.imdb.ImdbClient.search_movies", return_value=matches),
+        patch(
+            "arr.interactive.movie.search_candidates",
+            new_callable=AsyncMock,
+            return_value=([rel], [scored], q),
+        ),
+        patch("arr.interactive.movie.prompt_text", side_effect=["Batman", "1", "auto", ""]),
+        patch("arr.interactive.movie.prompt_confirm", return_value=True),
+        patch(
+            "arr.interactive.movie.enqueue_release",
+            new_callable=AsyncMock,
+            return_value=(True, "Started downloading"),
+        ) as mock_enqueue,
+    ):
+        interactive_movie(test_cfg, mock_console)
+        mock_enqueue.assert_called_once()
+        out = mock_console.export_text()
+        assert "Batman Begins" in out
+
+
+def test_interactive_queue_live_monitor(test_cfg, mock_console):
+    with (
+        patch("arr.interactive.queue.list_queue", return_value=[]),
+        patch("arr.interactive.queue.prompt_text", side_effect=["4", "b"]),
+        patch("arr.interactive.queue.live_monitor_downloads") as mock_live,
+    ):
+        interactive_queue(test_cfg, mock_console)
+        mock_live.assert_called_once()
+
+
+def test_live_monitor_downloads_safe_exit(test_cfg, mock_console):
+    with patch("arr.transmission.process.RpcClient.list_torrents", return_value=[]):
+        live_monitor_downloads(test_cfg, mock_console, max_iterations=1, poll_interval=0.01)
+    out = mock_console.export_text()
+    assert "Live Download Monitor" in out
+

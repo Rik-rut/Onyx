@@ -7,11 +7,11 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 from arr.transmission.errors import (
     AuthError,
     DependencyUnavailable,
-    PortInUseError,
     RpcError,
     StaleLockError,
     TransmissionError,
@@ -100,25 +100,43 @@ class Daemon:
         if self._proc is not None and self._proc.poll() is None:
             return
         if port_in_use(self.port):
-            raise PortInUseError(self.port)
+            return
+
+        lock = find_stale_lock()
+        if lock is not None and not port_in_use(self.port):
+            try:
+                lock.unlink()
+            except OSError:
+                pass
+
         Path(self.download_dir).mkdir(parents=True, exist_ok=True)
+        abs_download_dir = str(Path(self.download_dir).resolve())
+        cmd = [binary, "-f", "--port", str(self.port), "-w", abs_download_dir, "-T"]
+
+        flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
         try:
             self._proc = subprocess.Popen(
-                [binary, "-f", "--port", str(self.port), "-w", self.download_dir],
+                cmd,
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                creationflags=flags,
             )
         except OSError as e:
             raise TransmissionError(f"Failed to start transmission-daemon: {e}") from e
-        time.sleep(1.0)
-        if self._proc.poll() is not None:
-            # daemon exited immediately; a stale lock is the common cause
-            lock = find_stale_lock()
-            if lock is not None:
-                raise StaleLockError(
-                    f"transmission-daemon exited at startup; stale lock at {lock}"
-                )
-            raise TransmissionError("transmission-daemon exited immediately at startup")
+
+        deadline = time.time() + 5.0
+        while time.time() < deadline:
+            if self._proc.poll() is not None:
+                stale = find_stale_lock()
+                if stale is not None:
+                    raise StaleLockError(
+                        f"transmission-daemon exited at startup; stale lock at {stale}"
+                    )
+                raise TransmissionError("transmission-daemon exited immediately at startup")
+            if port_in_use(self.port, timeout=0.1):
+                return
+            time.sleep(0.1)
 
     def stop(self) -> None:
         if self._proc is not None:
@@ -132,6 +150,60 @@ class Daemon:
     @property
     def process(self) -> subprocess.Popen | None:
         return self._proc
+
+
+_managed_daemon: Daemon | None = None
+
+
+def get_managed_daemon() -> Daemon | None:
+    """Return the currently managed Daemon instance, if any."""
+    return _managed_daemon
+
+
+def ensure_daemon(cfg: Any, *, timeout: float = 5.0) -> Daemon | None:
+    """Ensure transmission-daemon is running and healthy on localhost.
+
+    If host is not localhost, returns None (remote daemon).
+    If localhost and already responding, returns the active Daemon (or None if external).
+    If localhost and offline, auto-starts transmission-daemon.
+    """
+    global _managed_daemon
+
+    if hasattr(cfg, "get"):
+        host = str(cfg.get("transmission_rpc_host", "127.0.0.1"))
+        port = int(cfg.get("transmission_rpc_port", 9091))
+        download_dir = str(cfg.get("transmission_download_dir", "downloads"))
+    elif isinstance(cfg, dict):
+        host = str(cfg.get("transmission_rpc_host", "127.0.0.1"))
+        port = int(cfg.get("transmission_rpc_port", 9091))
+        download_dir = str(cfg.get("transmission_download_dir", "downloads"))
+    else:
+        host = "127.0.0.1"
+        port = 9091
+        download_dir = "downloads"
+
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        return None
+
+    if port_in_use(port, timeout=0.2):
+        return _managed_daemon
+
+    binary = find_daemon()
+    if binary is None:
+        raise DependencyUnavailable("transmission-daemon not found")
+
+    stale_lock = find_stale_lock()
+    if stale_lock is not None and not port_in_use(port, timeout=0.2):
+        try:
+            stale_lock.unlink()
+        except OSError:
+            pass
+
+    daemon = Daemon(download_dir=download_dir, port=port)
+    daemon.start()
+    _managed_daemon = daemon
+    return daemon
+
 
 
 class RpcClient:
@@ -182,10 +254,12 @@ class RpcClient:
         return data.get("arguments", {})
 
     async def add_magnet(self, magnet: str, download_dir: str, paused: bool = False) -> dict:
-        args: dict = {"filename": magnet, "download-dir": download_dir}
+        abs_dir = str(Path(download_dir).resolve())
+        args: dict = {"filename": magnet, "download-dir": abs_dir}
         if paused:
             args["paused"] = True
         return await self._request("torrent-add", args)
+
 
     async def list_torrents(self) -> list[dict]:
         fields = [

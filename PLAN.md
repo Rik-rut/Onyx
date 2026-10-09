@@ -1,6 +1,56 @@
 # Implementation Plan
 
-Status: COMPLETE (All core requirements and Interactive CLI Mode verified)
+Status: COMPLETED (Phase 3: Direct Library Destination, Multi-Match Selection, Multi-Episode Downloads & Progress Bars Fully Implemented & Verified)
+
+## Phase 3 (Completed): Direct Library Destination, Multi-Match Selection, Multi-Episode Downloads & Progress Bars (R15)
+
+### Architecture Decision: Enhanced Interactive Workflows & Direct Paths
+- **Objective**: Improve the user experience with direct download paths (eliminating `.incomplete`), close search matches selection, comprehensive season status & multi-episode selection, and live real-time progress bars.
+- **Direct Library Destination**: Change `_staging_dir` in `src/arr/pipeline.py` to target `downloads/movies` and `downloads/tv-shows` directly instead of staging into `.incomplete`. Update `_resolve_content` to safely locate media files within these root folders.
+- **Close Match Search**:
+  - `TvmazeClient.search_tv_shows(query)` returns all candidate shows matching the search term.
+  - `ImdbClient.search_movies(query)` returns all candidate movies matching the search term.
+  - Interactive flows render a matching candidates table with `#`, `Title`, `Year`, `Status`, and `Genres/Network` and allow selecting the desired title.
+- **Season Overview & Multi-Episode Selection**:
+  - `TvmazeClient.seasons_overview(tmdb_id)` fetches season dates and status (`Completed` vs `Ongoing` vs `Upcoming`).
+  - Interactive TV flow renders the seasons table and allows picking a season.
+  - Within a season, users can choose to download the season pack or pick specific episodes.
+  - `parse_episode_selection(text, max_ep)` parses multi-selection input (e.g. `1, 3, 5`, `1-4`, `all`).
+  - Multiple selected episodes are resolved and queued in batch.
+- **Live Progress Visualization**:
+  - `render_queue_table` includes a visual Unicode/ASCII progress bar column (`[████████░░] 78.4%`).
+  - `live_monitor_downloads` provides a real-time monitor using `rich.progress.Progress` or Rich Live table displaying transfer speed (MB/s), ETA, and percent completion.
+  - Interactive TV and Movie flows offer real-time progress monitoring immediately after enqueuing.
+  - Queue view includes `[4] Live Monitor` for continuous real-time download tracking.
+
+### Phase 3 Implementation Steps
+1. **Direct Destination Update**:
+   - Update `_staging_dir` in `src/arr/pipeline.py` to point directly to `downloads/movies` and `downloads/tv-shows`.
+   - Update `_resolve_content` and hardlink notices.
+2. **Metadata Multi-Match Endpoints**:
+   - Add `search_tv_shows` and `seasons_overview` to `src/arr/metadata/tvmaze.py`.
+   - Add `search_movies` to `src/arr/metadata/imdb.py`.
+3. **UI Enhancements (`src/arr/interactive/ui.py`)**:
+   - Implement `render_matches_table(matches, title_type)`.
+   - Implement `render_seasons_table(seasons)`.
+   - Implement `render_episodes_table(episodes)`.
+   - Implement `parse_episode_selection(text, max_ep)`.
+   - Update `render_queue_table` to include a visual progress bar column.
+   - Implement `live_monitor_downloads(cfg, console)`.
+4. **Interactive TV Flow (`src/arr/interactive/tv.py`)**:
+   - Show close matches table and select match.
+   - Show seasons overview table with status (`Completed` vs `Ongoing`).
+   - Support multi-episode selection and enqueueing.
+   - Offer live progress monitor after starting download.
+5. **Interactive Movie Flow (`src/arr/interactive/movie.py`)**:
+   - Show close matches table and select match.
+   - Offer live progress monitor after starting download.
+6. **Queue Flow (`src/arr/interactive/queue.py`)**:
+   - Include progress bars and `[4] Live Monitor` option.
+7. **Verification**:
+   - Unit tests for parsing, search matches, season statuses, and direct paths.
+   - Run `pytest`, `ruff`, `mypy`.
+   - Smoke test interactive search with Frieren S2 and check live download behavior.
 
 ## Phase 2 (Completed): Interactive CLI Application (R14)
 

@@ -9,12 +9,14 @@ from arr.core.models import MediaType
 from arr.core.parsing import explain
 from arr.interactive.ui import (
     console,
+    live_monitor_downloads,
     print_header,
     prompt_confirm,
     prompt_text,
+    render_matches_table,
     render_releases_table,
 )
-from arr.metadata.imdb import ImdbClient, ImdbError
+from arr.metadata.imdb import ImdbClient
 from arr.pipeline import enqueue_release, search_candidates
 
 if TYPE_CHECKING:
@@ -32,23 +34,49 @@ def interactive_movie(cfg: Config, c: Console | None = None) -> None:
     if not query:
         return
 
-    # 1. Metadata resolution via IMDb
+    # 1. Metadata resolution via IMDb (support close matches)
     target.print(f"[cyan]Searching IMDb for '{query}'...[/cyan]")
     imdb = ImdbClient(cfg)
-    movie_info = None
+    matches: list[dict] = []
     try:
-        movie_info = imdb.search_movie(query)
-    except ImdbError as e:
-        target.print(f"[yellow]IMDb lookup failed ({e}); falling back to direct search.[/yellow]")
+        matches = imdb.search_movies(query)
+    except Exception:
+        pass
+    if not matches:
+        try:
+            m = imdb.search_movie(query)
+            if m:
+                matches = [m]
+        except Exception:
+            pass
+
+    chosen_match: dict | None = None
+    if len(matches) > 1:
+        target.print(render_matches_table(matches, "Movie", target))
+        while True:
+            m_choice = prompt_text(
+                f"Select movie [0-{len(matches)-1}] or 'b' to go back",
+                default="0",
+                allow_back=True,
+                c=target,
+            )
+            if not m_choice or m_choice.lower() in ("b", "back"):
+                return
+            if m_choice.isdigit() and 0 <= int(m_choice) < len(matches):
+                chosen_match = matches[int(m_choice)]
+                break
+            target.print(f"[red]Invalid selection. Enter 0 to {len(matches)-1}.[/red]")
+    elif len(matches) == 1:
+        chosen_match = matches[0]
 
     search_query = query
     imdb_id = None
     year = None
 
-    if movie_info:
-        search_query = movie_info.get("title") or query
-        imdb_id = movie_info.get("imdb_id") or movie_info.get("id")
-        year = movie_info.get("year")
+    if chosen_match:
+        search_query = chosen_match.get("title") or query
+        imdb_id = chosen_match.get("imdb_id") or chosen_match.get("id")
+        year = chosen_match.get("year")
         overview = (
             f"[bold white]{search_query}[/bold white] ({year or 'N/A'})\n"
             f"[cyan]IMDb ID:[/cyan] {imdb_id or 'N/A'}"
@@ -143,6 +171,10 @@ def interactive_movie(cfg: Config, c: Console | None = None) -> None:
         )
         if ok:
             target.print(f"[bold green]{msg}! Infohash: {chosen.infohash[:10]}[/bold green]")
+            if prompt_confirm("Monitor download progress live?", default=False, c=target):
+                live_monitor_downloads(
+                    cfg, target, single_hash=chosen.infohash, auto_exit_when_done=True
+                )
         else:
             target.print(f"[bold red]{msg}[/bold red]")
     else:

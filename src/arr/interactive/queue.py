@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 
 from arr.interactive.ui import (
     console,
+    live_monitor_downloads,
     print_header,
     prompt_confirm,
     prompt_text,
@@ -58,6 +59,7 @@ def interactive_queue(cfg: Config, c: Console | None = None) -> None:
         target.print("  [1] Refresh View")
         target.print("  [2] Cancel a Download")
         target.print("  [3] Manually Import Completed Download")
+        target.print("  [4] Live Monitor (Real-time tracking)")
         target.print("  [b] Back to Main Menu")
 
         choice = prompt_text("Choose action", default="1", allow_back=True, c=target)
@@ -65,6 +67,10 @@ def interactive_queue(cfg: Config, c: Console | None = None) -> None:
             return
 
         if choice == "1":
+            continue
+
+        elif choice == "4":
+            live_monitor_downloads(cfg, target)
             continue
 
         elif choice == "2":

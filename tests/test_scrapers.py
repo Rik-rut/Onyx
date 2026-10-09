@@ -59,6 +59,26 @@ def test_imdb_search_movie(tmp_path):
     assert m["year"] == 2010
 
 
+def test_imdb_search_movies_multiple(tmp_path):
+    multi_html = """
+    <html><body>
+      <li><a href="/title/tt1111111/">Movie One</a><span>2021</span></li>
+      <li><a href="/title/tt2222222/">Movie Two</a><span>2022</span></li>
+    </body></html>
+    """
+    session = FakeSession({"/find/": FakeResponse(200, multi_html)})
+    c = ImdbClient(cfg(), cache_dir=tmp_path, session=session)
+    movies = c.search_movies("test")
+    assert len(movies) == 2
+    assert movies[0]["imdb_id"] == "tt1111111"
+    assert movies[0]["title"] == "Movie One"
+    assert movies[0]["year"] == 2021
+    assert movies[1]["imdb_id"] == "tt2222222"
+    assert movies[1]["title"] == "Movie Two"
+    assert movies[1]["year"] == 2022
+
+
+
 def test_imdb_movie_details(tmp_path):
     session = FakeSession({"/title/tt1375666/": FakeResponse(200, IMDB_TITLE_HTML)})
     c = ImdbClient(cfg(), cache_dir=tmp_path, session=session)

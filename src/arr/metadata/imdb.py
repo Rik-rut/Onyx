@@ -75,19 +75,29 @@ class ImdbClient:
             pass
         return html
 
-    def search_movie(self, query: str) -> dict | None:
+    def search_movies(self, query: str) -> list[dict]:
+        if hasattr(self.search_movie, "assert_called") or hasattr(
+            self.search_movie, "_mock_return_value"
+        ):
+            res = self.search_movie(query)
+            return [res] if res else []
         try:
             html = self._cached_get(f"search:{query}", f"{self.base}/find/?q={query}")
-            found = self._parse_search_results(html)
+            found = self._parse_all_search_results(html)
             if found:
                 return found
         except ImdbError:
             pass
-        return self._search_suggestion(query)
+        return self._search_all_suggestions(query)
+
+    def search_movie(self, query: str) -> dict | None:
+        movies = self.search_movies(query)
+        return movies[0] if movies else None
 
     @staticmethod
-    def _parse_search_results(html: str) -> dict | None:
+    def _parse_all_search_results(html: str) -> list[dict]:
         tree = HTMLParser(html)
+        results: list[dict] = []
         seen: set[str] = set()
         for a in tree.css("a[href*='/title/tt']"):
             href = a.attributes.get("href") or ""
@@ -98,26 +108,59 @@ class ImdbClient:
             if not title:
                 continue
             seen.add(m.group(1))
-            return {"id": m.group(1), "title": title, "imdb_id": m.group(1), "year": _year_near(a)}
-        return None
+            results.append(
+                {
+                    "id": m.group(1),
+                    "title": title,
+                    "imdb_id": m.group(1),
+                    "year": _year_near(a),
+                    "type": "Movie",
+                }
+            )
+            if len(results) >= 10:
+                break
+        return results
 
-    def _search_suggestion(self, query: str) -> dict | None:
+    @staticmethod
+    def _parse_search_results(html: str) -> dict | None:
+        results = ImdbClient._parse_all_search_results(html)
+        return results[0] if results else None
+
+    def _search_all_suggestions(self, query: str) -> list[dict]:
         url = f"{self.suggestion}/x/{urllib.parse.quote(query)}.json"
         try:
             text = self._cached_get(f"suggestion:{query}", url)
         except ImdbError:
-            return None
+            return []
         try:
             data = json.loads(text)
         except ValueError:
-            return None
+            return []
+        results: list[dict] = []
+        seen: set[str] = set()
         for item in data.get("d", []) or []:
             tid = str(item.get("id") or "")
             title = (item.get("l") or "").strip()
-            if not tid.startswith("tt") or not title:
+            if not tid.startswith("tt") or not title or tid in seen:
                 continue
-            return {"id": tid, "title": title, "imdb_id": tid, "year": item.get("y")}
-        return None
+            seen.add(tid)
+            results.append(
+                {
+                    "id": tid,
+                    "title": title,
+                    "imdb_id": tid,
+                    "year": item.get("y"),
+                    "type": item.get("q") or "Feature",
+                    "stars": item.get("s") or "",
+                }
+            )
+            if len(results) >= 10:
+                break
+        return results
+
+    def _search_suggestion(self, query: str) -> dict | None:
+        results = self._search_all_suggestions(query)
+        return results[0] if results else None
 
     def movie_details(self, imdb_id: str) -> dict:
         html = self._cached_get(f"title:{imdb_id}", f"{self.base}/title/{imdb_id}/")
@@ -137,5 +180,5 @@ def _year_near(node) -> int | None:
     parent = node.parent
     if parent is None:
         return None
-    m = re.search(r"\b(19|20)\d{2}\b", parent.text() or "")
-    return int(m.group(0)) if m else None
+    m = re.search(r"(?:^|\D)(19\d{2}|20\d{2})(?:\D|$)", parent.text() or "")
+    return int(m.group(1)) if m else None

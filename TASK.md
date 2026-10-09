@@ -251,7 +251,24 @@ downloads/
   - **Backward Compatibility**:
     - Passing command-line arguments to `run.bat` (e.g. `run.bat search movie "Inception"`, `run.bat download tv "Breaking Bad" --auto`, `run.bat queue`) continues to work non-interactively without modification.
 
+### R15 — Direct Library Destination, Multi-Match Selection, Multi-Episode Downloads & Progress Bars
+
+- **Direct Download Location (No `.incomplete` folder)**:
+  - Video downloads save directly into `downloads/movies` and `downloads/tv-shows`.
+  - Removes the `.incomplete` intermediate staging directory.
+- **Close Matches Search Selection**:
+  - Searching for a TV show or movie displays a list/table of close matching titles (Title, Year, Status, Network/Genres).
+  - User can pick the exact desired match by index `[0-N]` instead of the app automatically locking into the first result.
+- **Season Status & Multi-Episode Selection**:
+  - After choosing a TV show, display available seasons with their status (`Completed`, `Ongoing`, `Upcoming`), episode counts, and air date ranges.
+  - Selecting a season offers choices to download the entire season (season pack) or select specific episodes.
+  - Episode selection supports multi-selection syntax: single numbers (`1`), comma-separated (`1, 3, 5`), ranges (`1-4`), or `all`.
+- **Live Download Progress Bars**:
+  - Queue view displays visual progress bars for each in-progress torrent (`[████████░░] 78.4%`), download speed, and ETA.
+  - Interactive download flow offers a live real-time progress bar monitor following download initiation.
+
 ## Definition of Done
+
 
 - [x] R1 implemented — CLI, exit codes, config, redaction, TV scope flags
 - [x] R2 implemented — transmission lifecycle + RPC + concurrency limit
@@ -269,8 +286,10 @@ downloads/
 - [x] R14 implemented — interactive CLI mode (TV & movie search/download, formatted Rich tables, queue view, series management)
 - [x] `run.bat` launches interactive CLI mode when run with no arguments
 - [x] Automated tests in `tests/test_interactive.py` verify interactive flows with mocked inputs
+- [x] R15 implemented — direct downloads (no .incomplete), multi-match search selection, season status & multi-episode selection, live progress bars
 - [x] `uv run pytest` passes with no network access
 - [x] `uv run ruff check .` and `uv run mypy arr` pass
+
 - [x] End-to-end smoke: `run.bat download movie "Inception" --auto` imports to `downloads/movies/Inception (2010)/` with an `.en.srt` subtitle present or a recorded `missing` state
 - [x] End-to-end smoke: `run.bat download tv "Breaking Bad"` downloads and imports the entire series into `downloads/tv-shows/Breaking Bad (2008)/Season NN/`
 - [x] End-to-end smoke: `run.bat series add "Some Airing Show"` adds monitoring, and a subsequent `run.bat daemon` tick enqueues only newly aired episodes

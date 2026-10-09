@@ -63,6 +63,51 @@ def test_rpc_client_construction():
     assert c._base.endswith("9091/transmission/rpc")
 
 
+def test_add_magnet_resolves_absolute_path(monkeypatch):
+    import pathlib
+    c = RpcClient("127.0.0.1", 9091, "u", "p")
+    captured_args = {}
+
+    async def fake_request(method, args=None):
+        nonlocal captured_args
+        captured_args = args or {}
+        return {"torrent-added": {"id": 1}}
+
+    monkeypatch.setattr(c, "_request", fake_request)
+    asyncio.run(c.add_magnet("magnet:?xt=urn:btih:abc", "relative/dir", paused=True))
+    assert pathlib.Path(captured_args["download-dir"]).is_absolute()
+    assert captured_args["paused"] is True
+
+
+
+def test_ensure_daemon_remote_host_returns_none():
+    from arr.transmission.process import ensure_daemon
+
+    cfg = {"transmission_rpc_host": "192.168.1.100", "transmission_rpc_port": 9091}
+    assert ensure_daemon(cfg) is None
+
+
+def test_ensure_daemon_missing_binary_raises_dependency_unavailable(monkeypatch):
+    from arr.transmission.process import ensure_daemon
+
+    monkeypatch.setattr("arr.transmission.process.port_in_use", lambda p, **k: False)
+    monkeypatch.setattr("arr.transmission.process.find_daemon", lambda: None)
+    cfg = {"transmission_rpc_host": "127.0.0.1", "transmission_rpc_port": 9091}
+    with pytest.raises(DependencyUnavailable):
+        ensure_daemon(cfg)
+
+
+def test_ensure_daemon_already_running_returns_none_or_managed(monkeypatch):
+    from arr.transmission.process import ensure_daemon
+
+    monkeypatch.setattr("arr.transmission.process.port_in_use", lambda p, **k: True)
+    cfg = {"transmission_rpc_host": "127.0.0.1", "transmission_rpc_port": 9091}
+    # When port is already in use, does not attempt to launch binary
+    res = ensure_daemon(cfg)
+    assert res is None or isinstance(res, Daemon)
+
+
+
 @pytest.mark.integration
 @pytest.mark.skipif(shutil.which("transmission-daemon") is None, reason="no daemon binary")
 def test_daemon_lifecycle(tmp_path):

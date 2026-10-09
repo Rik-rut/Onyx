@@ -38,15 +38,40 @@ class NyaaAdapter:
                 seeders = item.findtext("nyaa:seeders", namespaces=NYAA_NS)
                 leechers = item.findtext("nyaa:leechers", namespaces=NYAA_NS)
                 size = item.findtext("nyaa:size", namespaces=NYAA_NS)
-                infohash = item.findtext("nyaa:infoHash", namespaces=NYAA_NS)
-                if not title or not link:
+                raw_hash = (item.findtext("nyaa:infoHash", namespaces=NYAA_NS) or "").strip()
+                if not title:
                     continue
-                magnet = _magnet_from_link(link)
+
+                clean_hash = raw_hash.lower() if raw_hash else ""
+                if link.startswith("magnet:"):
+                    magnet = link
+                    if not clean_hash:
+                        clean_hash = _hash_from_magnet(magnet)
+                elif clean_hash:
+                    import urllib.parse
+
+                    dn = urllib.parse.quote(title)
+                    trackers = (
+                        "&tr=http%3A%2F%2Fnyaa.tracker.wf%3A7777%2Fannounce"
+                        "&tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce"
+                        "&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce"
+                    )
+                    magnet = f"magnet:?xt=urn:btih:{clean_hash}&dn={dn}{trackers}"
+                elif link:
+                    magnet = _magnet_from_link(link)
+                    clean_hash = _hash_from_magnet(magnet)
+                else:
+                    continue
+
+                if not clean_hash or clean_hash.startswith("http"):
+                    continue
+
+
                 out.append(
                     Release(
                         indexer=self.name,
                         title=title,
-                        infohash=(infohash or _hash_from_magnet(magnet)).lower(),
+                        infohash=clean_hash,
                         magnet=magnet,
                         media_type=MediaType.TV,
                         seeds=_to_int(seeders) or 0,
@@ -57,6 +82,7 @@ class NyaaAdapter:
             except (KeyError, TypeError, ValueError):
                 continue
         return out
+
 
 
 def _to_int(v) -> int | None:

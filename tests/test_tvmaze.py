@@ -89,3 +89,75 @@ def test_cache_hit_avoids_second_network_call(tmp_path):
         c.search_tv("x")
         c.search_tv("x")
     assert route.call_count == 1
+
+
+def test_search_tv_shows_multiple_results(tmp_path):
+    payload = [
+        {
+            "show": {
+                "id": 1,
+                "name": "Frieren: Beyond Journey's End",
+                "status": "Ended",
+                "premiered": "2023-09-29",
+                "genres": ["Animation", "Adventure", "Fantasy"],
+                "network": {"name": "Nippon TV"},
+                "externals": {"imdb": "tt22248374"},
+            }
+        },
+        {
+            "show": {
+                "id": 2,
+                "name": "Frieren: Special",
+                "status": "Ended",
+                "premiered": "2024-01-01",
+                "genres": ["Animation"],
+                "webChannel": {"name": "YouTube"},
+                "externals": {},
+            }
+        },
+    ]
+    with respx.mock:
+        respx.get(f"{BASE}/search/shows").mock(return_value=httpx.Response(200, json=payload))
+        c = TvmazeClient(cfg(), cache_dir=tmp_path)
+        shows = c.search_tv_shows("frieren")
+    assert len(shows) == 2
+    assert shows[0]["id"] == 1
+    assert shows[0]["name"] == "Frieren: Beyond Journey's End"
+    assert shows[0]["network"] == "Nippon TV"
+    assert shows[1]["id"] == 2
+    assert shows[1]["network"] == "YouTube"
+
+
+def test_seasons_overview_status_calculation(tmp_path):
+    details = {
+        "id": 10,
+        "name": "Test Show",
+        "status": "Running",
+        "premiered": "2023-01-01",
+        "externals": {},
+    }
+    episodes = [
+        {"season": 1, "number": 1, "name": "E1", "airdate": "2023-01-01"},
+        {"season": 1, "number": 2, "name": "E2", "airdate": "2023-01-08"},
+        {"season": 2, "number": 1, "name": "E3", "airdate": "2030-01-01"},
+        {"season": 3, "number": 1, "name": "E4", "airdate": "2030-06-01"},
+    ]
+    with respx.mock:
+        respx.get(f"{BASE}/shows/10").mock(return_value=httpx.Response(200, json=details))
+        respx.get(f"{BASE}/shows/10/episodes").mock(
+            return_value=httpx.Response(200, json=episodes)
+        )
+        c = TvmazeClient(cfg(), cache_dir=tmp_path)
+        seasons = c.seasons_overview(10)
+    assert len(seasons) == 3
+    # Season 1 past dates -> Completed
+    assert seasons[0]["season_number"] == 1
+    assert seasons[0]["status"] == "Completed"
+    assert seasons[0]["episode_count"] == 2
+    assert seasons[0]["premiere_date"] == "2023-01-01"
+    assert seasons[0]["end_date"] == "2023-01-08"
+    # Season 2 future dates -> Upcoming
+    assert seasons[1]["season_number"] == 2
+    assert seasons[1]["status"] == "Upcoming"
+    assert seasons[1]["episode_count"] == 1
+
