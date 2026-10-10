@@ -36,7 +36,7 @@ class ImdbClient:
         self.suggestion = str(
             cfg.get("imdb_suggestion_base_url", "https://v3.sg.media-imdb.com/suggestion")
         ).rstrip("/")
-        self.cache_dir = cache_dir or Path.home() / ".cache" / "arr" / "imdb"
+        self.cache_dir = cache_dir or Path(".cache") / "arr" / "imdb"
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self._session = session
 

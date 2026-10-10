@@ -27,3 +27,7 @@ downloads/
 *.md
 !README.md
 
+# Portable binaries
+bin/
+
+

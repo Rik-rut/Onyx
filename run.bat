@@ -10,10 +10,11 @@ pushd "%~dp0" || (
     exit /b 1
 )
 
-REM Locate uv. Explorer/GUI processes can have a stale PATH, so also probe the
-REM common install locations before giving up.
+REM Locate uv. Check local bin/ folder first for 100% portability.
 set "UV="
-for %%P in (uv.exe uv) do (
+if exist "%~dp0bin\uv.exe" set "UV=%~dp0bin\uv.exe"
+if not defined UV if exist "%~dp0uv.exe" set "UV=%~dp0uv.exe"
+if not defined UV for %%P in (uv.exe uv) do (
     if not defined UV for %%Q in (%%~$PATH:P) do set "UV=%%~fQ"
 )
 if not defined UV (

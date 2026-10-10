@@ -12,16 +12,27 @@ from arr.subtitles.subscene import SubsceneClient
 from arr.subtitles.yify import YifySubtitlesClient
 
 
+def _find_ffmpeg() -> str | None:
+    root = Path(__file__).resolve().parents[3]
+    for name in ("ffmpeg.exe", "ffmpeg"):
+        for base in (root / "bin", Path.cwd() / "bin"):
+            cand = base / name
+            if cand.exists():
+                return str(cand.resolve())
+    return shutil.which("ffmpeg")
+
+
 def ffmpeg_available() -> bool:
-    return shutil.which("ffmpeg") is not None
+    return _find_ffmpeg() is not None
 
 
 def convert_to_srt(src: Path, dst: Path) -> bool:
     """Convert .ass/.sub to .srt via ffmpeg when available. Returns True on success."""
-    if ffmpeg_available():
+    binary = _find_ffmpeg()
+    if binary:
         try:
             subprocess.run(
-                ["ffmpeg", "-y", "-i", str(src), str(dst)],
+                [binary, "-y", "-i", str(src), str(dst)],
                 check=True,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,

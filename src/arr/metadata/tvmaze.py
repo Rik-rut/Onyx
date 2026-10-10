@@ -36,7 +36,7 @@ class TvmazeClient:
     def __init__(self, cfg, cache_dir: Path | None = None):
         self.cfg = cfg
         self.base = str(cfg.get("tvmaze_base_url", "https://api.tvmaze.com")).rstrip("/")
-        self.cache_dir = cache_dir or Path.home() / ".cache" / "arr" / "tvmaze"
+        self.cache_dir = cache_dir or Path(".cache") / "arr" / "tvmaze"
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
     def _cache_path(self, path: str, params: dict) -> Path:

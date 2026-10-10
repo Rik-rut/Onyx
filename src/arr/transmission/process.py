@@ -22,6 +22,16 @@ def _which(name: str) -> str | None:
     return shutil.which(name)
 
 
+def _local_bin_candidates() -> list[Path]:
+    root = Path(__file__).resolve().parents[3]
+    return [
+        root / "bin" / "transmission",
+        root / "bin",
+        Path.cwd() / "bin" / "transmission",
+        Path.cwd() / "bin",
+    ]
+
+
 def _program_files_candidates() -> list[Path]:
     cands: list[Path] = []
     for env in ("ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"):
@@ -36,11 +46,15 @@ def find_binary(name: str, override: str = "") -> str | None:
         p = Path(override)
         if p.exists():
             return str(p)
+    exe = name if (sys.platform != "win32" or name.endswith(".exe")) else f"{name}.exe"
+    for base in _local_bin_candidates():
+        cand = base / exe
+        if cand.exists():
+            return str(cand.resolve())
     found = _which(name)
     if found:
         return found
     if sys.platform == "win32":
-        exe = name if name.endswith(".exe") else f"{name}.exe"
         for base in _program_files_candidates():
             cand = base / exe
             if cand.exists():
@@ -70,13 +84,17 @@ def port_in_use(port: int, *, timeout: float = 0.5) -> bool:
 
 def lock_file_paths() -> list[Path]:
     """Known transmission-daemon lock file locations."""
+    locks: list[Path] = []
+    local_cfg = Path(".cache") / "transmission"
+    locks.extend([local_cfg / "lock", local_cfg / "transmission-daemon" / "lock"])
     home = Path.home()
     if sys.platform == "win32":
         appdata = os.environ.get("APPDATA") or os.environ.get("LOCALAPPDATA")
         base = Path(appdata) / "Transmission" if appdata else home / "Transmission"
     else:
         base = home / ".config" / "transmission"
-    return [base / "transmission-daemon" / "lock", base / "lock"]
+    locks.extend([base / "transmission-daemon" / "lock", base / "lock"])
+    return locks
 
 
 def find_stale_lock() -> Path | None:
@@ -111,7 +129,19 @@ class Daemon:
 
         Path(self.download_dir).mkdir(parents=True, exist_ok=True)
         abs_download_dir = str(Path(self.download_dir).resolve())
-        cmd = [binary, "-f", "--port", str(self.port), "-w", abs_download_dir, "-T"]
+        local_cfg = (Path(".cache") / "transmission").resolve()
+        local_cfg.mkdir(parents=True, exist_ok=True)
+        cmd = [
+            binary,
+            "-f",
+            "--port",
+            str(self.port),
+            "-w",
+            abs_download_dir,
+            "-g",
+            str(local_cfg),
+            "-T",
+        ]
 
         flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
         try:

@@ -153,7 +153,11 @@ def default_config_path() -> Path:
 
 
 def load_config(path: Path | str | None = None) -> Config:
-    p = Path(path) if path is not None else default_config_path()
+    if path is not None:
+        p = Path(path)
+    else:
+        local = Path.cwd() / "config.toml"
+        p = local if local.exists() else default_config_path()
     values = dict(DEFAULTS)
     if p.exists():
         with p.open("rb") as f:

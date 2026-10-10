@@ -25,7 +25,7 @@ class HttpClient:
     def __init__(self, cfg, cache_dir: Path | None = None):
         self.cfg = cfg
         self._last: dict[str, float] = {}
-        self._cache_dir = cache_dir or Path.home() / ".cache" / "arr" / "http"
+        self._cache_dir = cache_dir or Path(".cache") / "arr" / "http"
         self._cache_dir.mkdir(parents=True, exist_ok=True)
 
     def _interval(self, key: str) -> float:

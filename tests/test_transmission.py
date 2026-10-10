@@ -49,6 +49,7 @@ def test_rpc_401_raises_auth_error(monkeypatch):
 
 def test_missing_binary_raises_dependency_unavailable(monkeypatch):
     monkeypatch.setenv("PATH", "")
+    monkeypatch.setattr("arr.transmission.process._local_bin_candidates", lambda: [])
     try:
         from arr.transmission.process import find_remote
 
