@@ -59,6 +59,23 @@ def interactive_cmd(ctx: typer.Context) -> None:
         typer.echo("\nGoodbye!")
 
 
+@app.command("web")
+def web_cmd(
+    ctx: typer.Context,
+    host: str = typer.Option("0.0.0.0", "--host", help="Host interface to bind on"),
+    port: int = typer.Option(8080, "--port", help="Port to listen on"),
+) -> None:
+    """Launch the Web UI dashboard."""
+    import uvicorn
+
+    from arr.web.app import create_app
+
+    cfg = _config(ctx)
+    web_app = create_app(cfg)
+    typer.echo(f"Starting ARR Web UI on http://{host}:{port}")
+    uvicorn.run(web_app, host=host, port=port)
+
+
 @app.callback(invoke_without_command=True)
 def main(
     ctx: typer.Context,
@@ -183,6 +200,25 @@ def download_tv(
         raise typer.Exit(ExitCode.RUNTIME_ERROR)
 
 
+@download_app.command("magnet")
+def download_magnet_cmd(
+    ctx: typer.Context,
+    uri: str,
+    auto: bool = typer.Option(False, "--auto"),
+    no_wait: bool = typer.Option(False, "--no-wait"),
+) -> None:
+    from arr.pipeline import download_magnet as _dm_magnet
+
+    cfg = _config(ctx)
+    try:
+        asyncio.run(_dm_magnet(uri, cfg, auto=auto, no_wait=no_wait))
+    except typer.Exit:
+        raise
+    except Exception as e:
+        log.error("%s", e)
+        raise typer.Exit(ExitCode.RUNTIME_ERROR)
+
+
 @series_app.command("add")
 def series_add(ctx: typer.Context, query: str) -> None:
     from arr.pipeline import series_add as _sa
@@ -254,6 +290,32 @@ def cancel(
     cfg = _config(ctx)
     try:
         asyncio.run(cancel_download(download_id, cfg, delete_data=delete_data))
+    except Exception as e:
+        log.error("%s", e)
+        raise typer.Exit(ExitCode.RUNTIME_ERROR)
+
+
+@app.command("pause")
+def pause_cmd(ctx: typer.Context, download_id: str) -> None:
+    from arr.pipeline import pause_download
+
+    cfg = _config(ctx)
+    try:
+        asyncio.run(pause_download(download_id, cfg))
+        typer.echo(f"Paused download {download_id}.")
+    except Exception as e:
+        log.error("%s", e)
+        raise typer.Exit(ExitCode.RUNTIME_ERROR)
+
+
+@app.command("resume")
+def resume_cmd(ctx: typer.Context, download_id: str) -> None:
+    from arr.pipeline import resume_download
+
+    cfg = _config(ctx)
+    try:
+        asyncio.run(resume_download(download_id, cfg))
+        typer.echo(f"Resumed download {download_id}.")
     except Exception as e:
         log.error("%s", e)
         raise typer.Exit(ExitCode.RUNTIME_ERROR)

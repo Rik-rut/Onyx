@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -62,6 +63,19 @@ def _rpc(cfg: Config) -> RpcClient:
 
 
 
+def check_disk_space(target_path: Path, required_bytes: int) -> tuple[bool, int, int]:
+    """Check free space on target_path volume. Returns (has_space, free_bytes, required_bytes)."""
+    p = target_path if target_path.exists() else target_path.parent
+    while not p.exists() and p != p.parent:
+        p = p.parent
+    try:
+        stat = shutil.disk_usage(str(p))
+        free = stat.free
+        return (free >= required_bytes, free, required_bytes)
+    except OSError:
+        return (True, 0, required_bytes)
+
+
 def _library_root(cfg: Config) -> Path:
     return Path(str(cfg.get("library_root", "downloads"))).resolve()
 
@@ -113,6 +127,11 @@ __all__ = [
     "list_queue",
     "get_status",
     "cancel_download",
+    "pause_download",
+    "resume_download",
+    "set_download_priority",
+    "download_magnet",
+    "apply_speed_limits",
     "import_download",
     "run_daemon",
     "_import_record",
@@ -248,8 +267,16 @@ async def download_movie(
     if existing and existing.get("state") not in ("skipped", "failed") and not force:
         print(f"Already known (state={existing['state']}); use --force to re-add.")
         db.close()
-        return
     staging = _staging_dir(cfg, "movie")
+    if getattr(chosen, "size_bytes", 0) > 0:
+        has_space, free_b, req_b = check_disk_space(staging, chosen.size_bytes)
+        if not has_space:
+            gb_free = free_b / (1024**3)
+            gb_req = req_b / (1024**3)
+            print(
+                f"warning: target disk space low ({gb_free:.1f} GB free, {gb_req:.1f} GB required)",
+                file=sys.stderr,
+            )
     rpc = _rpc(cfg)
     limit = int(cfg.get("max_concurrent_downloads", 3))
     paused = False
@@ -564,6 +591,15 @@ async def _enqueue_episodes(
 
     count = 0
     for (covered, chosen), paused in zip(plans, paused_flags):
+        if getattr(chosen, "size_bytes", 0) > 0:
+            has_space, free_b, req_b = check_disk_space(staging, chosen.size_bytes)
+            if not has_space:
+                gb_free = free_b / (1024**3)
+                gb_req = req_b / (1024**3)
+                print(
+                    f"warning: disk space low ({gb_free:.1f} GB free, {gb_req:.1f} GB needed)",
+                    file=sys.stderr,
+                )
         try:
             await rpc.add_magnet(chosen.magnet, str(staging), paused=paused)
         except DependencyUnavailable as e:
@@ -675,6 +711,7 @@ async def enqueue_release(
             return False, f"Already known (state={existing['state']}); use --force to re-add."
         staging = _staging_dir(cfg, media_type)
         rpc = _rpc(cfg)
+        await apply_speed_limits(rpc, cfg)
         limit = int(cfg.get("max_concurrent_downloads", 3))
         paused = False
         try:
@@ -685,6 +722,16 @@ async def enqueue_release(
             return False, f"Transmission unavailable: {e}"
         except Exception:
             paused = False
+
+        if getattr(chosen, "size_bytes", 0) > 0:
+            has_space, free_b, req_b = check_disk_space(staging, chosen.size_bytes)
+            if not has_space:
+                gb_free = free_b / (1024**3)
+                gb_req = req_b / (1024**3)
+                print(
+                    f"warning: disk space low ({gb_free:.1f} GB free, {gb_req:.1f} GB needed)",
+                    file=sys.stderr,
+                )
 
         try:
             await rpc.add_magnet(chosen.magnet, str(staging), paused=paused)
@@ -1126,6 +1173,165 @@ async def cancel_download(download_id, cfg, delete_data=False):
         print(f"Torrent removed locally; daemon said: {rpc_error}", file=sys.stderr)
     else:
         print(f"Cancelled {infohash}.")
+
+
+async def apply_speed_limits(rpc: RpcClient, cfg: Config) -> None:
+    dl = int(cfg.get("max_download_speed_kbps", 0) or 0)
+    up = int(cfg.get("max_upload_speed_kbps", 0) or 0)
+    if dl > 0 or up > 0:
+        try:
+            await rpc.set_speed_limits(download_kbps=dl, upload_kbps=up)
+        except Exception:
+            pass
+
+
+async def pause_download(download_id: str, cfg: Config) -> bool:
+    db = _db(cfg)
+    rec = db.get_download(download_id)
+    if not rec:
+        db.close()
+        print("Not found.", file=sys.stderr)
+        raise SystemExit(3)
+    infohash = str(rec["infohash"])
+    rpc = _rpc(cfg)
+    try:
+        await rpc.pause_torrent(infohash)
+        db.set_download_state(infohash, "paused")
+        db.close()
+        return True
+    except Exception as e:
+        db.close()
+        raise e
+
+
+async def resume_download(download_id: str, cfg: Config) -> bool:
+    db = _db(cfg)
+    rec = db.get_download(download_id)
+    if not rec:
+        db.close()
+        print("Not found.", file=sys.stderr)
+        raise SystemExit(3)
+    infohash = str(rec["infohash"])
+    rpc = _rpc(cfg)
+    try:
+        await rpc.resume_torrent(infohash)
+        db.set_download_state(infohash, "downloading")
+        db.close()
+        return True
+    except Exception as e:
+        db.close()
+        raise e
+
+
+async def set_download_priority(download_id: str, priority: str, cfg: Config) -> bool:
+    db = _db(cfg)
+    rec = db.get_download(download_id)
+    if not rec:
+        db.close()
+        print("Not found.", file=sys.stderr)
+        raise SystemExit(3)
+    infohash = str(rec["infohash"])
+    rpc = _rpc(cfg)
+    try:
+        await rpc.set_torrent_priority(infohash, priority)
+        db.close()
+        return True
+    except Exception as e:
+        db.close()
+        raise e
+
+
+async def download_magnet(
+    uri: str,
+    cfg: Config,
+    *,
+    auto: bool = False,
+    no_wait: bool = False,
+) -> str:
+    """Directly download and track a magnet URI or .torrent file."""
+    import urllib.parse
+
+    from guessit import guessit
+
+    infohash = ""
+    display_name = ""
+    p_file = Path(uri)
+    if p_file.exists() and p_file.suffix.lower() == ".torrent":
+        display_name = p_file.stem
+    elif uri.startswith("magnet:"):
+        qs = urllib.parse.parse_qs(urllib.parse.urlparse(uri).query)
+        for xt in qs.get("xt", []):
+            if xt.startswith("urn:btih:"):
+                infohash = xt.split("urn:btih:")[-1].lower()
+                break
+        dns = qs.get("dn", [])
+        if dns:
+            display_name = dns[0]
+
+    # Guess metadata from display name or path
+    target_to_guess = display_name or (p_file.name if p_file.exists() else uri)
+    guess = guessit(target_to_guess)
+    title = str(guess.get("title") or display_name or "Unknown")
+    year = guess.get("year")
+    season = guess.get("season")
+    episode = guess.get("episode")
+    g_type = guess.get("type")
+
+    is_tv = (season is not None) or (episode is not None) or (g_type == "episode")
+    media_type = MediaType.TV if is_tv else MediaType.MOVIE
+
+    # Metadata enrichment (best effort)
+    imdb_id = None
+    tmdb_id = None
+    try:
+        if media_type == MediaType.MOVIE:
+            imdb = ImdbClient(cfg)
+            m = imdb.search_movie(title)
+            if m:
+                imdb_id = m.get("imdb_id") or m.get("id")
+                title = m.get("title") or title
+                year = m.get("year") or year
+        else:
+            tvm = TvmazeClient(cfg)
+            s = tvm.search_tv(title)
+            if s:
+                tmdb_id = s.get("id")
+                title = s.get("name") or title
+                ext = s.get("externals") or {}
+                imdb_id = ext.get("imdb")
+    except Exception:
+        pass
+
+    staging = _staging_dir(cfg, media_type.value)
+    rpc = _rpc(cfg)
+    await apply_speed_limits(rpc, cfg)
+
+    # Ingest into Transmission
+    res = await rpc.add_magnet(uri, str(staging))
+    added_info = res.get("torrent-added") or res.get("torrent-duplicate") or {}
+    final_hash = (added_info.get("hashString") or infohash).lower()
+    final_name = added_info.get("name") or display_name or title
+
+    if not final_hash:
+        raise ValueError("Could not extract infohash from torrent")
+
+    db = _db(cfg)
+    db.add_download(
+        final_hash,
+        media_type=media_type.value,
+        title=final_name,
+        season=season if isinstance(season, int) else None,
+        episode=episode if isinstance(episode, int) else None,
+        year=year if isinstance(year, int) else None,
+        imdb_id=imdb_id,
+        tmdb_id=tmdb_id,
+        download_dir=str(staging),
+    )
+    db.set_download_state(final_hash, "downloading")
+    db.close()
+
+    print(f"Enqueued {media_type.value}: {final_name} [{final_hash[:8]}]")
+    return final_hash
 
 
 async def import_download(download_id, cfg, overwrite=False):

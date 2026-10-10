@@ -1,0 +1,751 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ARR — Shows & Movies Downloader</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: { 500: '#3b82f6', 600: '#2563eb', 700: '#1d4ed8' },
+            darkbg: '#0f172a',
+            darkcard: '#1e293b',
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    [v-cloak] { display: none; }
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: #0f172a; }
+    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #475569; }
+  </style>
+</head>
+<body class="bg-darkbg text-slate-100 min-h-screen font-sans antialiased selection:bg-blue-600 selection:text-white">
+  <div id="app" v-cloak class="min-h-screen flex flex-col">
+    <!-- Navigation Header -->
+    <header class="bg-darkcard border-b border-slate-800 sticky top-0 z-40">
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-between h-16">
+        <div class="flex items-center space-x-3">
+          <div class="w-9 h-9 rounded-lg bg-blue-600 flex items-center justify-center font-black text-xl text-white shadow-lg shadow-blue-500/30">
+            A
+          </div>
+          <div>
+            <h1 class="font-bold text-lg leading-tight tracking-wide text-white">ARR</h1>
+            <p class="text-xs text-slate-400">Shows & Movies Downloader</p>
+          </div>
+        </div>
+
+        <nav class="flex space-x-1 sm:space-x-2">
+          <button @click="activeTab = 'search'" :class="tabClass('search')">
+            <svg class="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+            Search & Discover
+          </button>
+          <button @click="activeTab = 'queue'" :class="tabClass('queue')">
+            <svg class="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+            Queue
+            <span v-if="torrents.length" class="ml-1.5 px-1.5 py-0.5 text-xs rounded-full bg-blue-500/20 text-blue-400 font-semibold">
+              {{ torrents.length }}
+            </span>
+          </button>
+          <button @click="activeTab = 'series'; loadMonitoredSeries()" :class="tabClass('series')">
+            <svg class="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 4v16M17 4v16M3 8h4m10 0h4M3 12h18M3 16h4m10 0h4M4 20h16a1 1 0 001-1V5a1 1 0 00-1-1H4a1 1 0 00-1 1v14a1 1 0 001 1z"/></svg>
+            Monitored Series
+          </button>
+          <button @click="activeTab = 'library'; loadLibrary()" :class="tabClass('library')">
+            <svg class="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>
+            Library
+          </button>
+          <button @click="activeTab = 'settings'; loadSettings()" :class="tabClass('settings')">
+            <svg class="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+            Settings
+          </button>
+        </nav>
+
+        <div class="flex items-center space-x-2">
+          <span :class="wsConnected ? 'bg-emerald-500' : 'bg-amber-500'" class="w-2.5 h-2.5 rounded-full inline-block animate-pulse"></span>
+          <span class="text-xs text-slate-400 font-mono">{{ wsConnected ? 'Live' : 'Syncing' }}</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Container -->
+    <main class="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8">
+
+      <!-- Toast Notification -->
+      <div v-if="toast.message" :class="toast.type === 'error' ? 'bg-rose-900 border-rose-700 text-rose-100' : 'bg-emerald-900 border-emerald-700 text-emerald-100'"
+           class="fixed bottom-6 right-6 border px-4 py-3 rounded-lg shadow-xl z-50 flex items-center space-x-2 transition-all">
+        <span>{{ toast.message }}</span>
+        <button @click="toast.message = ''" class="ml-2 font-bold text-lg">&times;</button>
+      </div>
+
+      <!-- TAB 1: SEARCH & DISCOVER -->
+      <section v-if="activeTab === 'search'" class="space-y-6">
+        <div class="bg-darkcard border border-slate-800 p-6 rounded-xl shadow-md">
+          <div class="flex flex-col sm:flex-row gap-3">
+            <div class="inline-flex rounded-lg border border-slate-700 p-1 bg-slate-900 self-start">
+              <button @click="searchType = 'movie'" :class="searchType === 'movie' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'" class="px-3 py-1.5 rounded-md text-sm font-medium transition">
+                Movies
+              </button>
+              <button @click="searchType = 'tv'" :class="searchType === 'tv' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'" class="px-3 py-1.5 rounded-md text-sm font-medium transition">
+                TV Shows
+              </button>
+            </div>
+
+            <div class="flex-1 relative">
+              <input v-model="searchQuery" @keyup.enter="performSearch" type="text"
+                     :placeholder="searchType === 'movie' ? 'Search movies (e.g. Inception, Spirited Away)...' : 'Search TV shows (e.g. Breaking Bad, Shogun)...'"
+                     class="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition">
+            </div>
+
+            <button @click="performSearch" :disabled="searching" class="bg-blue-600 hover:bg-blue-700 text-white font-medium px-5 py-2.5 rounded-lg flex items-center justify-center space-x-2 transition disabled:opacity-50">
+              <span v-if="searching" class="animate-spin w-4 h-4 border-2 border-white border-t-transparent rounded-full"></span>
+              <span>Search</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Search Results Grid -->
+        <div v-if="searchResults.length" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+          <div v-for="item in searchResults" :key="item.id"
+               class="bg-darkcard border border-slate-800 rounded-xl overflow-hidden hover:border-slate-600 transition flex flex-col group">
+            <div class="aspect-[2/3] bg-slate-800 relative overflow-hidden">
+              <img v-if="item.poster" :src="item.poster" :alt="item.title" class="w-full h-full object-cover group-hover:scale-105 transition duration-300">
+              <div v-else class="w-full h-full flex items-center justify-center text-slate-600 font-bold text-sm p-4 text-center">
+                No Poster
+              </div>
+              <div v-if="item.year" class="absolute top-2 right-2 px-2 py-0.5 rounded bg-black/70 backdrop-blur text-xs font-semibold text-white">
+                {{ item.year }}
+              </div>
+            </div>
+
+            <div class="p-3.5 flex-1 flex flex-col justify-between">
+              <div>
+                <h3 class="font-bold text-sm text-white line-clamp-1 group-hover:text-blue-400 transition">{{ item.title }}</h3>
+                <p v-if="item.stars" class="text-xs text-slate-400 line-clamp-1 mt-0.5">{{ item.stars }}</p>
+                <p v-if="item.genres && item.genres.length" class="text-xs text-slate-500 mt-0.5">{{ item.genres.join(', ') }}</p>
+              </div>
+
+              <div class="mt-3 pt-2 border-t border-slate-800/80 flex items-center justify-between">
+                <button @click="openReleaseModal(item)" class="w-full bg-blue-600/20 hover:bg-blue-600 text-blue-400 hover:text-white text-xs font-semibold py-1.5 px-3 rounded transition flex items-center justify-center space-x-1">
+                  <span>Releases</span>
+                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div v-else-if="searched && !searching" class="text-center py-16 text-slate-500">
+          No media found matching your query.
+        </div>
+      </section>
+
+      <!-- TAB 2: QUEUE & DOWNLOADS -->
+      <section v-if="activeTab === 'queue'" class="space-y-6">
+        <!-- Direct Magnet & Action Bar -->
+        <div class="bg-darkcard border border-slate-800 p-5 rounded-xl shadow-md flex flex-col md:flex-row items-center justify-between gap-4">
+          <div class="w-full md:w-2/3 flex gap-2">
+            <input v-model="magnetInput" type="text" placeholder="Paste magnet link or torrent URI..."
+                   class="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500">
+            <button @click="ingestMagnet" :disabled="!magnetInput"
+                    class="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-semibold px-4 py-2 rounded-lg transition whitespace-nowrap">
+              Add Torrent
+            </button>
+          </div>
+
+          <button @click="triggerManualImport" :disabled="importing"
+                  class="w-full md:w-auto bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-sm font-semibold px-4 py-2 rounded-lg transition flex items-center justify-center space-x-2">
+            <span v-if="importing" class="animate-spin w-4 h-4 border-2 border-slate-300 border-t-transparent rounded-full"></span>
+            <span>Trigger Import Tick</span>
+          </button>
+        </div>
+
+        <!-- Torrents Table -->
+        <div class="bg-darkcard border border-slate-800 rounded-xl overflow-hidden shadow-md">
+          <div class="p-4 border-b border-slate-800 flex items-center justify-between">
+            <h2 class="font-bold text-base text-white">Active Torrents & Downloads</h2>
+            <span class="text-xs text-slate-400 font-mono">{{ torrents.length }} items</span>
+          </div>
+
+          <div v-if="torrents.length" class="divide-y divide-slate-800">
+            <div v-for="t in torrents" :key="t.id" class="p-4 hover:bg-slate-800/40 transition">
+              <div class="flex flex-col md:flex-row md:items-center justify-between gap-2">
+                <div class="flex-1 min-w-0">
+                  <h4 class="font-semibold text-sm text-slate-100 truncate">{{ t.name }}</h4>
+                  <div class="flex items-center space-x-4 mt-1 text-xs text-slate-400 font-mono">
+                    <span :class="statusBadgeClass(t.status_code)" class="px-2 py-0.5 rounded font-semibold uppercase tracking-wider text-[10px]">
+                      {{ t.status }}
+                    </span>
+                    <span>{{ formatBytes(t.total_size) }}</span>
+                    <span>↓ {{ formatSpeed(t.rate_download) }}</span>
+                    <span>↑ {{ formatSpeed(t.rate_upload) }}</span>
+                    <span v-if="t.eta > 0">ETA: {{ formatEta(t.eta) }}</span>
+                  </div>
+                </div>
+
+                <div class="flex items-center space-x-2 self-end md:self-center mt-2 md:mt-0">
+                  <button v-if="t.status_code === 0" @click="resumeTorrent(t.id)" class="px-2.5 py-1 bg-emerald-600/20 hover:bg-emerald-600 text-emerald-400 hover:text-white rounded text-xs font-semibold transition">
+                    Resume
+                  </button>
+                  <button v-else @click="pauseTorrent(t.id)" class="px-2.5 py-1 bg-amber-600/20 hover:bg-amber-600 text-amber-400 hover:text-white rounded text-xs font-semibold transition">
+                    Pause
+                  </button>
+                  <button @click="deleteTorrent(t.id)" class="px-2.5 py-1 bg-rose-600/20 hover:bg-rose-600 text-rose-400 hover:text-white rounded text-xs font-semibold transition">
+                    Delete
+                  </button>
+                </div>
+              </div>
+
+              <!-- Progress Bar -->
+              <div class="mt-3 w-full bg-slate-900 rounded-full h-2 overflow-hidden flex">
+                <div :style="{ width: t.progress + '%' }"
+                     :class="t.status_code === 6 ? 'bg-emerald-500' : 'bg-blue-500'"
+                     class="h-full rounded-full transition-all duration-300"></div>
+              </div>
+              <div class="flex justify-between items-center mt-1 text-[11px] text-slate-500 font-mono">
+                <span>{{ t.progress }}%</span>
+                <span class="truncate max-w-xs">{{ t.infohash }}</span>
+              </div>
+            </div>
+          </div>
+
+          <div v-else class="text-center py-16 text-slate-500">
+            Queue is currently empty. Start a search or paste a magnet link above!
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 3: MONITORED SERIES -->
+      <section v-if="activeTab === 'series'" class="space-y-6">
+        <div class="bg-darkcard border border-slate-800 rounded-xl p-6 shadow-md">
+          <div class="flex items-center justify-between mb-4">
+            <h2 class="font-bold text-base text-white">Monitored TV Series</h2>
+            <button @click="loadMonitoredSeries" class="text-xs text-blue-400 hover:text-blue-300">Refresh</button>
+          </div>
+
+          <div v-if="monitoredList.length" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            <div v-for="s in monitoredList" :key="s.id" class="border border-slate-800 bg-slate-900/60 rounded-lg p-4 flex flex-col justify-between">
+              <div>
+                <div class="flex items-start justify-between">
+                  <h3 class="font-bold text-sm text-white">{{ s.title }}</h3>
+                  <span class="text-xs px-2 py-0.5 rounded bg-blue-500/10 text-blue-400 font-medium">{{ s.status || 'Monitored' }}</span>
+                </div>
+                <div class="mt-2 text-xs text-slate-400 flex items-center space-x-3">
+                  <span>Total: {{ s.total_episodes }} eps</span>
+                  <span class="text-emerald-400">Imported: {{ s.imported_episodes }}</span>
+                  <span class="text-amber-400">Missing: {{ s.missing_episodes }}</span>
+                </div>
+              </div>
+
+              <div class="mt-4 pt-3 border-t border-slate-800 flex justify-between items-center">
+                <span class="text-xs text-slate-500 font-mono">ID: {{ s.tmdb_id }}</span>
+                <button @click="unmonitorSeries(s.id)" class="text-xs text-rose-400 hover:text-rose-300">Unmonitor</button>
+              </div>
+            </div>
+          </div>
+          <div v-else class="text-center py-12 text-slate-500">
+            No monitored TV shows yet. Search for a show and select "Monitor Series".
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 4: LIBRARY -->
+      <section v-if="activeTab === 'library'" class="space-y-6">
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <!-- Movies Library -->
+          <div class="bg-darkcard border border-slate-800 rounded-xl p-5 shadow-md">
+            <h2 class="font-bold text-base text-white mb-3 flex items-center justify-between">
+              <span>Movies Library</span>
+              <span class="text-xs font-mono text-slate-400">{{ library.movies.length }} items</span>
+            </h2>
+            <div v-if="library.movies.length" class="divide-y divide-slate-800 max-h-96 overflow-y-auto">
+              <div v-for="m in library.movies" :key="m.title" class="py-2.5 flex items-center justify-between text-xs">
+                <span class="font-medium text-slate-200 truncate pr-2">{{ m.title }}</span>
+                <span class="text-slate-400 font-mono whitespace-nowrap">{{ m.size_mb }} MB</span>
+              </div>
+            </div>
+            <div v-else class="text-center py-10 text-slate-500 text-xs">No movies detected in library directory.</div>
+          </div>
+
+          <!-- TV Shows Library -->
+          <div class="bg-darkcard border border-slate-800 rounded-xl p-5 shadow-md">
+            <h2 class="font-bold text-base text-white mb-3 flex items-center justify-between">
+              <span>TV Shows Library</span>
+              <span class="text-xs font-mono text-slate-400">{{ library.shows.length }} shows</span>
+            </h2>
+            <div v-if="library.shows.length" class="divide-y divide-slate-800 max-h-96 overflow-y-auto">
+              <div v-for="s in library.shows" :key="s.title" class="py-2.5 flex items-center justify-between text-xs">
+                <span class="font-medium text-slate-200 truncate pr-2">{{ s.title }}</span>
+                <span class="text-slate-400 font-mono whitespace-nowrap">{{ s.episodes_count }} eps ({{ s.seasons_count }} seasons)</span>
+              </div>
+            </div>
+            <div v-else class="text-center py-10 text-slate-500 text-xs">No TV shows detected in library directory.</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 5: SETTINGS -->
+      <section v-if="activeTab === 'settings'" class="space-y-6">
+        <div class="bg-darkcard border border-slate-800 rounded-xl p-6 shadow-md max-w-4xl mx-auto">
+          <h2 class="font-bold text-base text-white mb-4">Application & Downloader Configuration</h2>
+
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label class="block text-xs font-semibold text-slate-300 mb-1">Download Staging Root</label>
+              <input v-model="settingsForm.download_root" type="text" class="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm text-white">
+            </div>
+
+            <div>
+              <label class="block text-xs font-semibold text-slate-300 mb-1">Media Library Root</label>
+              <input v-model="settingsForm.library_root" type="text" class="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm text-white">
+            </div>
+
+            <div>
+              <label class="block text-xs font-semibold text-slate-300 mb-1">Import Mode</label>
+              <select v-model="settingsForm.import_mode" class="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm text-white">
+                <option value="hardlink">hardlink (recommended)</option>
+                <option value="copy">copy</option>
+                <option value="move">move</option>
+              </select>
+            </div>
+
+            <div>
+              <label class="block text-xs font-semibold text-slate-300 mb-1">Max Concurrent Downloads</label>
+              <input v-model.number="settingsForm.max_concurrent_downloads" type="number" min="1" max="20" class="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm text-white">
+            </div>
+
+            <div>
+              <label class="block text-xs font-semibold text-slate-300 mb-1">Seeding Policy</label>
+              <select v-model="settingsForm.seeding_policy" class="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm text-white">
+                <option value="ratio">ratio (stop when target ratio reached)</option>
+                <option value="time">time (stop after seeding duration)</option>
+                <option value="manual">manual (never auto-remove)</option>
+                <option value="remove_on_import">remove_on_import</option>
+              </select>
+            </div>
+
+            <div>
+              <label class="block text-xs font-semibold text-slate-300 mb-1">Max Download Speed (KB/s, 0=unlimited)</label>
+              <input v-model.number="settingsForm.max_download_speed_kbps" type="number" min="0" class="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm text-white">
+            </div>
+
+            <div>
+              <label class="block text-xs font-semibold text-slate-300 mb-1">Max Upload Speed (KB/s, 0=unlimited)</label>
+              <input v-model.number="settingsForm.max_upload_speed_kbps" type="number" min="0" class="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm text-white">
+            </div>
+
+            <div class="flex items-center space-x-3 pt-4">
+              <input v-model="settingsForm.prefer_season_packs" id="preferPacks" type="checkbox" class="rounded bg-slate-900 border-slate-700 text-blue-600 focus:ring-0">
+              <label for="preferPacks" class="text-xs text-slate-300 font-medium">Prefer Season Packs over individual episodes</label>
+            </div>
+          </div>
+
+          <div class="mt-6 pt-4 border-t border-slate-800 flex justify-end">
+            <button @click="saveSettings" :disabled="savingSettings" class="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-6 py-2 rounded-lg text-sm transition disabled:opacity-50">
+              Save Settings
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- RELEASES / DETAIL MODAL -->
+      <div v-if="selectedItem" class="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div class="bg-darkcard border border-slate-800 rounded-2xl max-w-4xl w-full max-h-[90vh] flex flex-col shadow-2xl overflow-hidden">
+          <!-- Modal Header -->
+          <div class="p-5 border-b border-slate-800 flex items-start justify-between">
+            <div class="flex items-center space-x-4">
+              <img v-if="selectedItem.poster" :src="selectedItem.poster" class="w-12 h-16 object-cover rounded bg-slate-800">
+              <div>
+                <h3 class="font-bold text-lg text-white">{{ selectedItem.title }} <span v-if="selectedItem.year" class="text-slate-400 font-normal">({{ selectedItem.year }})</span></h3>
+                <p class="text-xs text-slate-400 mt-0.5">{{ selectedItem.genres ? selectedItem.genres.join(', ') : selectedItem.type }}</p>
+              </div>
+            </div>
+            <button @click="selectedItem = null; releases = []" class="text-slate-400 hover:text-white text-2xl font-bold">&times;</button>
+          </div>
+
+          <!-- TV Scope Controls -->
+          <div v-if="searchType === 'tv'" class="p-4 bg-slate-900/60 border-b border-slate-800 flex flex-wrap gap-3 items-center text-xs">
+            <label class="font-semibold text-slate-300">Download Scope:</label>
+            <select v-model="tvScope" @change="fetchReleases" class="bg-slate-800 border border-slate-700 rounded px-2.5 py-1 text-slate-200">
+              <option value="pack">Season Pack</option>
+              <option value="episode">Specific Episode</option>
+            </select>
+
+            <span class="text-slate-500">|</span>
+            <label class="font-semibold text-slate-300">Season:</label>
+            <input v-model.number="selectedSeason" @change="fetchReleases" type="number" min="1" class="w-16 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-slate-200">
+
+            <template v-if="tvScope === 'episode'">
+              <label class="font-semibold text-slate-300">Episode:</label>
+              <input v-model.number="selectedEpisode" @change="fetchReleases" type="number" min="1" class="w-16 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-slate-200">
+            </template>
+
+            <button @click="monitorThisShow" class="ml-auto bg-blue-600/20 hover:bg-blue-600 text-blue-400 hover:text-white px-3 py-1 rounded font-semibold transition">
+              + Monitor Show
+            </button>
+          </div>
+
+          <!-- Releases Table -->
+          <div class="flex-1 overflow-y-auto p-5">
+            <div v-if="loadingReleases" class="py-16 flex flex-col items-center justify-center space-y-3">
+              <div class="animate-spin w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full"></div>
+              <p class="text-xs text-slate-400">Searching indexers and scoring candidate releases...</p>
+            </div>
+
+            <div v-else-if="releases.length" class="space-y-3">
+              <div v-for="r in releases" :key="r.infohash"
+                   class="bg-slate-900/70 border border-slate-800/80 rounded-xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 hover:border-slate-700 transition">
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-center space-x-2">
+                    <span :class="scoreClass(r.score)" class="px-2 py-0.5 rounded text-[11px] font-bold">Score: {{ r.score }}</span>
+                    <span class="text-[11px] font-semibold px-2 py-0.5 rounded bg-slate-800 text-slate-300 uppercase">{{ r.indexer }}</span>
+                    <span v-if="r.resolution" class="text-[11px] font-semibold px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-400">{{ r.resolution }}</span>
+                    <span v-if="r.codec" class="text-[11px] text-slate-400">{{ r.codec }}</span>
+                  </div>
+                  <h4 class="font-medium text-sm text-slate-200 mt-1 truncate">{{ r.title }}</h4>
+                  <div class="flex items-center space-x-3 mt-1 text-xs text-slate-400 font-mono">
+                    <span>{{ formatBytes(r.size_bytes) }}</span>
+                    <span class="text-emerald-400 font-semibold">{{ r.seeds }} seeds</span>
+                    <span class="text-slate-500">{{ r.peers }} peers</span>
+                  </div>
+                </div>
+
+                <button @click="downloadRelease(r)" class="bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold px-4 py-2 rounded-lg transition whitespace-nowrap self-end sm:self-center">
+                  Download
+                </button>
+              </div>
+            </div>
+
+            <div v-else class="text-center py-16 text-slate-500">
+              No releases found on public indexers matching this media.
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    const { createApp, ref, onMounted } = Vue;
+
+    createApp({
+      setup() {
+        const activeTab = ref('search');
+        const searchType = ref('movie');
+        const searchQuery = ref('');
+        const searching = ref(false);
+        const searched = ref(false);
+        const searchResults = ref([]);
+
+        const selectedItem = ref(null);
+        const loadingReleases = ref(false);
+        const releases = ref([]);
+        const tvScope = ref('pack');
+        const selectedSeason = ref(1);
+        const selectedEpisode = ref(1);
+
+        const torrents = ref([]);
+        const wsConnected = ref(false);
+        const magnetInput = ref('');
+        const importing = ref(false);
+
+        const monitoredList = ref([]);
+        const library = ref({ movies: [], shows: [] });
+        const settingsForm = ref({});
+        const savingSettings = ref(false);
+
+        const toast = ref({ message: '', type: 'info' });
+
+        function showToast(msg, type = 'info') {
+          toast.value = { message: msg, type };
+          setTimeout(() => { toast.value.message = ''; }, 4000);
+        }
+
+        function tabClass(tab) {
+          const active = activeTab.value === tab;
+          return [
+            'flex items-center px-3 py-2 rounded-lg text-xs font-semibold transition',
+            active ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-800'
+          ].join(' ');
+        }
+
+        function statusBadgeClass(code) {
+          if (code === 4) return 'bg-blue-500/20 text-blue-400';
+          if (code === 6) return 'bg-emerald-500/20 text-emerald-400';
+          if (code === 0) return 'bg-slate-700 text-slate-300';
+          return 'bg-amber-500/20 text-amber-400';
+        }
+
+        function scoreClass(score) {
+          if (score >= 500) return 'bg-emerald-500/20 text-emerald-400';
+          if (score >= 200) return 'bg-blue-500/20 text-blue-400';
+          return 'bg-slate-700 text-slate-300';
+        }
+
+        function formatBytes(bytes) {
+          if (!bytes) return '0 B';
+          const k = 1024;
+          const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+          const i = Math.floor(Math.log(bytes) / Math.log(k));
+          return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+
+        function formatSpeed(bytesPerSec) {
+          return formatBytes(bytesPerSec) + '/s';
+        }
+
+        function formatEta(seconds) {
+          if (seconds < 0) return '∞';
+          if (seconds < 60) return seconds + 's';
+          if (seconds < 3600) return Math.floor(seconds / 60) + 'm';
+          return (seconds / 3600).toFixed(1) + 'h';
+        }
+
+        async function performSearch() {
+          if (!searchQuery.value.trim()) return;
+          searching.value = true;
+          searched.value = true;
+          searchResults.value = [];
+          try {
+            const endpoint = searchType.value === 'movie' ? '/api/search/movies' : '/api/search/tv';
+            const res = await fetch(`${endpoint}?q=${encodeURIComponent(searchQuery.value)}`);
+            if (res.ok) {
+              searchResults.value = await res.json();
+            } else {
+              showToast('Search request failed', 'error');
+            }
+          } catch (e) {
+            showToast('Network error during search', 'error');
+          } finally {
+            searching.value = false;
+          }
+        }
+
+        function openReleaseModal(item) {
+          selectedItem.value = item;
+          releases.value = [];
+          fetchReleases();
+        }
+
+        async function fetchReleases() {
+          if (!selectedItem.value) return;
+          loadingReleases.value = true;
+          releases.value = [];
+          try {
+            let url = '';
+            if (searchType.value === 'movie') {
+              url = `/api/releases/movie?title=${encodeURIComponent(selectedItem.value.title)}&year=${selectedItem.value.year || ''}&imdb_id=${selectedItem.value.imdb_id || ''}`;
+            } else {
+              const pack = tvScope.value === 'pack';
+              url = `/api/releases/tv?title=${encodeURIComponent(selectedItem.value.title)}&season=${selectedSeason.value}&episode=${pack ? '' : selectedEpisode.value}&pack=${pack}`;
+            }
+            const res = await fetch(url);
+            if (res.ok) {
+              releases.value = await res.json();
+            }
+          } catch (e) {
+            showToast('Failed to fetch releases', 'error');
+          } finally {
+            loadingReleases.value = false;
+          }
+        }
+
+        async function downloadRelease(r) {
+          try {
+            const body = {
+              indexer: r.indexer,
+              title: r.title,
+              infohash: r.infohash,
+              magnet: r.magnet,
+              media_type: searchType.value,
+              seeds: r.seeds,
+              peers: r.peers,
+              size_bytes: r.size_bytes,
+              resolution: r.resolution,
+              codec: r.codec,
+              source: r.source,
+              is_pack: r.is_pack,
+              display_title: selectedItem.value.title,
+              year: selectedItem.value.year,
+              season: searchType.value === 'tv' ? selectedSeason.value : null,
+              episode: (searchType.value === 'tv' && tvScope.value === 'episode') ? selectedEpisode.value : null,
+            };
+            const res = await fetch('/api/queue/download/release', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(body)
+            });
+            if (res.ok) {
+              showToast(`Added ${r.title} to queue!`, 'success');
+              selectedItem.value = null;
+              activeTab.value = 'queue';
+            } else {
+              const err = await res.json();
+              showToast(err.detail || 'Failed to download release', 'error');
+            }
+          } catch (e) {
+            showToast('Failed to trigger download', 'error');
+          }
+        }
+
+        async function ingestMagnet() {
+          if (!magnetInput.value.trim()) return;
+          try {
+            const res = await fetch('/api/queue/download/magnet', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ magnet: magnetInput.value.trim() })
+            });
+            if (res.ok) {
+              showToast('Magnet link ingested into download queue!', 'success');
+              magnetInput.value = '';
+            } else {
+              showToast('Failed to ingest magnet link', 'error');
+            }
+          } catch (e) {
+            showToast('Network error adding magnet', 'error');
+          }
+        }
+
+        async function pauseTorrent(id) {
+          await fetch(`/api/queue/${id}/pause`, { method: 'POST' });
+        }
+
+        async function resumeTorrent(id) {
+          await fetch(`/api/queue/${id}/resume`, { method: 'POST' });
+        }
+
+        async function deleteTorrent(id) {
+          if (!confirm('Remove this torrent from Transmission?')) return;
+          await fetch(`/api/queue/${id}/delete`, { method: 'POST' });
+          showToast('Torrent removed from queue', 'info');
+        }
+
+        async function triggerManualImport() {
+          importing.value = true;
+          try {
+            const res = await fetch('/api/queue/import', { method: 'POST' });
+            if (res.ok) {
+              showToast('Import tick executed successfully!', 'success');
+            }
+          } finally {
+            importing.value = false;
+          }
+        }
+
+        async function monitorThisShow() {
+          if (!selectedItem.value) return;
+          try {
+            const res = await fetch('/api/series/monitor', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                tmdb_id: selectedItem.value.id,
+                title: selectedItem.value.title,
+                status: selectedItem.value.status || 'Returning Series'
+              })
+            });
+            if (res.ok) {
+              showToast(`Now monitoring ${selectedItem.value.title}!`, 'success');
+            }
+          } catch (e) {
+            showToast('Failed to monitor show', 'error');
+          }
+        }
+
+        async function loadMonitoredSeries() {
+          try {
+            const res = await fetch('/api/series');
+            if (res.ok) monitoredList.value = await res.json();
+          } catch (e) {}
+        }
+
+        async function unmonitorSeries(id) {
+          if (!confirm('Stop monitoring this series?')) return;
+          await fetch(`/api/series/${id}`, { method: 'DELETE' });
+          loadMonitoredSeries();
+          showToast('Series unmonitored', 'info');
+        }
+
+        async function loadLibrary() {
+          try {
+            const res = await fetch('/api/library');
+            if (res.ok) library.value = await res.json();
+          } catch (e) {}
+        }
+
+        async function loadSettings() {
+          try {
+            const res = await fetch('/api/config');
+            if (res.ok) settingsForm.value = await res.json();
+          } catch (e) {}
+        }
+
+        async function saveSettings() {
+          savingSettings.value = true;
+          try {
+            const res = await fetch('/api/config', {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(settingsForm.value)
+            });
+            if (res.ok) {
+              showToast('Settings saved successfully!', 'success');
+            } else {
+              showToast('Failed to save settings', 'error');
+            }
+          } finally {
+            savingSettings.value = false;
+          }
+        }
+
+        function initWebSocket() {
+          const loc = window.location;
+          const proto = loc.protocol === 'https:' ? 'wss:' : 'ws:';
+          const wsUrl = `${proto}//${loc.host}/ws/queue`;
+          const socket = new WebSocket(wsUrl);
+
+          socket.onopen = () => { wsConnected.value = true; };
+          socket.onmessage = (event) => {
+            try {
+              const data = JSON.parse(event.data);
+              if (data && data.torrents) {
+                torrents.value = data.torrents;
+              }
+            } catch (e) {}
+          };
+          socket.onclose = () => {
+            wsConnected.value = false;
+            setTimeout(initWebSocket, 2000);
+          };
+          socket.onerror = () => { socket.close(); };
+        }
+
+        onMounted(() => {
+          initWebSocket();
+        });
+
+        return {
+          activeTab, searchType, searchQuery, searching, searched, searchResults,
+          selectedItem, loadingReleases, releases, tvScope, selectedSeason, selectedEpisode,
+          torrents, wsConnected, magnetInput, importing, monitoredList, library,
+          settingsForm, savingSettings, toast,
+          tabClass, statusBadgeClass, scoreClass, formatBytes, formatSpeed, formatEta,
+          performSearch, openReleaseModal, fetchReleases, downloadRelease, ingestMagnet,
+          pauseTorrent, resumeTorrent, deleteTorrent, triggerManualImport,
+          monitorThisShow, loadMonitoredSeries, unmonitorSeries, loadLibrary,
+          loadSettings, saveSettings
+        };
+      }
+    }).mount('#app');
+  </script>
+</body>
+</html>

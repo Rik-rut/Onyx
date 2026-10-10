@@ -329,6 +329,76 @@ class RpcClient:
             raise RpcError(f"Torrent {torrent_id} not found")
         return await self._request("torrent-stop", {"ids": [t["id"]]})
 
+    async def pause_torrent(self, torrent_id: int | str) -> dict:
+        return await self.stop(torrent_id)
+
+    async def resume_torrent(self, torrent_id: int | str) -> dict:
+        return await self.start(torrent_id)
+
+    async def move_queue_top(self, torrent_id: int | str) -> dict:
+        t = await self.get(torrent_id)
+        if t is None:
+            raise RpcError(f"Torrent {torrent_id} not found")
+        return await self._request("queue-move-top", {"ids": [t["id"]]})
+
+    async def move_queue_up(self, torrent_id: int | str) -> dict:
+        t = await self.get(torrent_id)
+        if t is None:
+            raise RpcError(f"Torrent {torrent_id} not found")
+        return await self._request("queue-move-up", {"ids": [t["id"]]})
+
+    async def move_queue_down(self, torrent_id: int | str) -> dict:
+        t = await self.get(torrent_id)
+        if t is None:
+            raise RpcError(f"Torrent {torrent_id} not found")
+        return await self._request("queue-move-down", {"ids": [t["id"]]})
+
+    async def move_queue_bottom(self, torrent_id: int | str) -> dict:
+        t = await self.get(torrent_id)
+        if t is None:
+            raise RpcError(f"Torrent {torrent_id} not found")
+        return await self._request("queue-move-bottom", {"ids": [t["id"]]})
+
+    async def set_torrent_priority(self, torrent_id: int | str, priority: str) -> dict:
+        pri = priority.lower().strip()
+        if pri in ("top", "move-top"):
+            return await self.move_queue_top(torrent_id)
+        if pri in ("up", "move-up"):
+            return await self.move_queue_up(torrent_id)
+        if pri in ("down", "move-down"):
+            return await self.move_queue_down(torrent_id)
+        if pri in ("bottom", "move-bottom"):
+            return await self.move_queue_bottom(torrent_id)
+
+        t = await self.get(torrent_id)
+        if t is None:
+            raise RpcError(f"Torrent {torrent_id} not found")
+        val = 1 if pri == "high" else (-1 if pri == "low" else 0)
+        return await self._request("torrent-set", {"ids": [t["id"]], "bandwidthPriority": val})
+
+    async def set_speed_limits(
+        self, download_kbps: int = 0, upload_kbps: int = 0
+    ) -> dict:
+        args: dict[str, Any] = {}
+        if download_kbps > 0:
+            args["speed-limit-down-enabled"] = True
+            args["speed-limit-down"] = int(download_kbps)
+        elif download_kbps == 0:
+            args["speed-limit-down-enabled"] = False
+
+        if upload_kbps > 0:
+            args["speed-limit-up-enabled"] = True
+            args["speed-limit-up"] = int(upload_kbps)
+        elif upload_kbps == 0:
+            args["speed-limit-up-enabled"] = False
+
+        if args:
+            return await self._request("session-set", args)
+        return {}
+
+    async def get_session(self) -> dict:
+        return await self._request("session-get")
+
 
 # Transmission RPC torrent status codes.
 STOPPED = 0

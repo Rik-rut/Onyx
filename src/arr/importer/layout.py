@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import shutil
+import subprocess
 from collections.abc import Callable
 from pathlib import Path
 
@@ -324,3 +326,88 @@ def _episode_sub_filter(
     if any(_is_tagged_for(s, season, episode) for s in subs):
         return lambda s: _is_tagged_for(s, season, episode)
     return lambda s: not _has_any_episode_tag(s)
+
+
+def _find_ffprobe() -> str | None:
+    root = Path(__file__).resolve().parents[3]
+    for name in ("ffprobe.exe", "ffprobe"):
+        for base in (root / "bin", Path.cwd() / "bin"):
+            cand = base / name
+            if cand.exists():
+                return str(cand.resolve())
+    return shutil.which("ffprobe")
+
+
+def inspect_media_streams(path: Path) -> dict[str, list[dict]]:
+    """Inspect audio, video, and subtitle streams in a media container using ffprobe."""
+    empty: dict[str, list[dict]] = {"video": [], "audio": [], "subtitle": []}
+    if not path.exists() or not path.is_file():
+        return empty
+
+    ffprobe = _find_ffprobe()
+    if not ffprobe:
+        return empty
+
+    try:
+        cmd = [
+            ffprobe,
+            "-v",
+            "quiet",
+            "-print_format",
+            "json",
+            "-show_streams",
+            str(path),
+        ]
+        res = subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=30)
+        data = json.loads(res.stdout)
+        out: dict[str, list[dict]] = {"video": [], "audio": [], "subtitle": []}
+        for st in data.get("streams", []):
+            ctype = st.get("codec_type", "")
+            if ctype in out:
+                tags = st.get("tags", {}) or {}
+                disp = st.get("disposition", {}) or {}
+                lang = str(tags.get("language") or tags.get("lang") or "").lower()
+                title = str(tags.get("title") or "")
+                out[ctype].append(
+                    {
+                        "index": st.get("index", 0),
+                        "codec_name": st.get("codec_name", ""),
+                        "codec_type": ctype,
+                        "language": lang,
+                        "title": title,
+                        "forced": bool(disp.get("forced", 0)),
+                        "default": bool(disp.get("default", 0)),
+                    }
+                )
+        return out
+    except Exception:
+        return empty
+
+
+def has_embedded_subtitles(path: Path, language: str = "en") -> bool:
+    """Return True if path contains an embedded subtitle track matching language."""
+    streams = inspect_media_streams(path)
+    sub_streams = streams.get("subtitle", [])
+    if not sub_streams:
+        return False
+
+    lang_lower = language.lower()
+    norm_targets = {lang_lower}
+    if lang_lower == "en":
+        norm_targets.update({"eng", "english"})
+    elif lang_lower == "es":
+        norm_targets.update({"spa", "spanish"})
+    elif lang_lower == "fr":
+        norm_targets.update({"fre", "fra", "french"})
+    elif lang_lower == "de":
+        norm_targets.update({"ger", "deu", "german"})
+
+    for st in sub_streams:
+        st_lang = (st.get("language") or "").lower()
+        if st_lang in norm_targets:
+            return True
+        st_title = (st.get("title") or "").lower()
+        if any(t in st_title for t in norm_targets):
+            return True
+
+    return False

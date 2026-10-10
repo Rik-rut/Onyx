@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import difflib
 from dataclasses import dataclass
+from typing import Protocol
 
 
 @dataclass
@@ -15,6 +16,21 @@ class SubtitleCandidate:
     hd: bool
     upload_date: str
     download_link: str | None = None
+
+
+class SubtitleProvider(Protocol):
+    def search(
+        self,
+        *,
+        imdb_id: str | None = None,
+        tmdb_id: int | None = None,
+        title: str | None = None,
+        season: int | None = None,
+        episode: int | None = None,
+        languages: list[str] | None = None,
+    ) -> list[SubtitleCandidate]: ...
+
+    def download(self, candidate: SubtitleCandidate) -> bytes: ...
 
 
 class SubtitleError(Exception):

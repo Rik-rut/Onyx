@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from rich.console import Console
@@ -746,5 +746,173 @@ def test_check_exit_keypress():
             patch("select.select", return_value=([], [], [])),
         ):
             assert check_exit_keypress() is False
+
+
+def test_interactive_queue_pause_and_resume(test_cfg, mock_console):
+    with (
+        patch(
+            "arr.interactive.queue.list_queue",
+            return_value=[{"infohash": "h123", "title": "Test Item"}],
+        ),
+        patch("arr.interactive.queue.prompt_text", side_effect=["5", "0", "", "6", "0", "", "b"]),
+        patch("arr.interactive.queue.pause_download") as mock_pause,
+        patch("arr.interactive.queue.resume_download") as mock_resume,
+    ):
+        interactive_queue(test_cfg, mock_console)
+        mock_pause.assert_called_once_with("h123", test_cfg)
+        mock_resume.assert_called_once_with("h123", test_cfg)
+
+
+def test_interactive_main_menu_direct_magnet(test_cfg, mock_console):
+    from arr.interactive.app import run_interactive
+
+    with (
+        patch("arr.transmission.process.ensure_daemon"),
+        patch("arr.transmission.process.port_in_use", return_value=True),
+        patch(
+            "arr.interactive.app.prompt_text",
+            side_effect=["d", "magnet:?xt=urn:btih:xyz", "", "0"],
+        ),
+        patch("arr.pipeline.download_magnet") as mock_dl_mag,
+    ):
+        code = run_interactive(test_cfg, mock_console)
+        assert code == 0
+        mock_dl_mag.assert_called_once_with("magnet:?xt=urn:btih:xyz", test_cfg)
+
+
+def test_interactive_config_edit(test_cfg, mock_console, tmp_path):
+    from arr.interactive.config_view import interactive_config
+
+    custom_cfg_path = tmp_path / "config.toml"
+    with (
+        patch("arr.config.settings.default_config_path", return_value=custom_cfg_path),
+        patch(
+            "arr.interactive.config_view.prompt_text",
+            side_effect=[
+                "2",
+                "1",
+                "/custom/downloads",
+                "",
+                "2",
+                "3",
+                "2",
+                "",
+                "b",
+            ],
+        ),
+    ):
+        interactive_config(test_cfg, mock_console)
+        assert test_cfg.get("download_root") == "/custom/downloads"
+        assert test_cfg.get("import_mode") == "copy"
+        assert custom_cfg_path.exists()
+
+
+def test_interactive_library_browser(test_cfg, mock_console, tmp_path):
+    from arr.interactive.library_view import (
+        get_library_movies,
+        get_library_shows,
+        interactive_library,
+    )
+
+    movies_dir = tmp_path / "downloads" / "movies"
+    m_folder = movies_dir / "Inception (2010)"
+    m_folder.mkdir(parents=True)
+    (m_folder / "Inception (2010).mkv").write_bytes(b"\x00" * 1024)
+
+    tv_dir = tmp_path / "downloads" / "tv-shows"
+    show_folder = tv_dir / "Breaking Bad (2008)" / "Season 01"
+    show_folder.mkdir(parents=True)
+    (show_folder / "Breaking Bad - S01E01 - Pilot.mkv").write_bytes(b"\x00" * 1024)
+
+    test_cfg.values["library_root"] = str(tmp_path / "downloads")
+
+    movies = get_library_movies(movies_dir)
+    assert len(movies) == 1
+    assert "Inception" in movies[0]["title"]
+    assert movies[0]["primary_ext"] == ".mkv"
+
+    shows = get_library_shows(tv_dir, test_cfg)
+    assert len(shows) == 1
+    assert "Breaking Bad" in shows[0]["title"]
+    assert shows[0]["episodes_count"] == 1
+
+    with patch(
+        "arr.interactive.library_view.prompt_text",
+        side_effect=["1", "b", "2", "b", "b"],
+    ):
+        interactive_library(test_cfg, mock_console)
+
+
+def test_movie_filter_and_sort(test_cfg, mock_console):
+    from arr.core.models import MediaType, Release
+    from arr.interactive.movie import interactive_movie
+
+    r1 = Release(
+        title="Inception.2010.720p.BluRay",
+        infohash="hash1",
+        size_bytes=1000,
+        seeds=10,
+        indexer="yts",
+        magnet="magnet:?xt=urn:btih:hash1",
+        media_type=MediaType.MOVIE,
+    )
+    r2 = Release(
+        title="Inception.2010.1080p.BluRay",
+        infohash="hash2",
+        size_bytes=2000,
+        seeds=50,
+        indexer="yts",
+        magnet="magnet:?xt=urn:btih:hash2",
+        media_type=MediaType.MOVIE,
+    )
+
+    with (
+        patch("arr.metadata.imdb.ImdbClient.search_movies", return_value=[]),
+        patch("arr.metadata.imdb.ImdbClient.search_movie", return_value=None),
+        patch(
+            "arr.pipeline.search_candidates",
+            return_value=([r1, r2], [], None),
+        ),
+        patch(
+            "arr.interactive.movie.prompt_text",
+            side_effect=[
+                "Inception",
+                "f 1080p",
+                "sort seeds",
+                "b",
+            ],
+        ),
+    ):
+        interactive_movie(test_cfg, mock_console)
+
+
+def test_app_exit_daemon_cleanup(test_cfg, mock_console):
+    from arr.interactive.app import run_interactive
+
+    mock_daemon = MagicMock()
+    with (
+        patch("arr.transmission.process.port_in_use", return_value=False),
+        patch("arr.transmission.process.ensure_daemon", return_value=mock_daemon),
+        patch("arr.interactive.app.prompt_text", return_value="0"),
+        patch("arr.interactive.app.prompt_confirm", return_value=False),
+    ):
+        code = run_interactive(test_cfg, mock_console)
+        assert code == 0
+        mock_daemon.stop.assert_called_once()
+
+
+def test_daemon_view_open_web(test_cfg, mock_console):
+    from arr.interactive.daemon_view import interactive_daemon
+
+    with (
+        patch("arr.transmission.process.RpcClient.list_torrents", return_value=[]),
+        patch("arr.transmission.process.port_in_use", return_value=True),
+        patch("arr.interactive.daemon_view.prompt_text", side_effect=["w", "", "b"]),
+        patch("webbrowser.open") as mock_web_open,
+    ):
+        interactive_daemon(test_cfg, mock_console)
+        mock_web_open.assert_called_once_with("http://127.0.0.1:9091/transmission/web/")
+
+
 
 

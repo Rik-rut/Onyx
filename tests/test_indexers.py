@@ -220,3 +220,22 @@ def test_nyaa_bad_xml():
                     Query(media_type=MediaType.TV, text="x")
                 )
             )
+
+
+def test_nyaa_supports_movie_and_tv():
+    adapter = NyaaAdapter("https://nyaa.si", http())
+    assert adapter.supports(MediaType.TV) is True
+    assert adapter.supports(MediaType.MOVIE) is True
+
+
+def test_nyaa_search_movie_sets_movie_media_type():
+    with respx.mock:
+        respx.get("https://nyaa.si/").mock(return_value=httpx.Response(200, text=NYAA_RSS))
+        out = asyncio.run(
+            NyaaAdapter("https://nyaa.si", http()).search(
+                Query(media_type=MediaType.MOVIE, text="Spirited Away")
+            )
+        )
+    assert len(out) == 1
+    assert out[0].media_type == MediaType.MOVIE
+    assert out[0].infohash == "cafe1234"

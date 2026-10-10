@@ -11,12 +11,15 @@ from selectolax.lexbor import LexborHTMLParser as HTMLParser
 from arr.subtitles.base import SubtitleCandidate, SubtitleError
 
 
-def _fetch_with(session, url: str, timeout: int = 20):
+def _fetch_with(session, url: str, timeout: int = 20, headers: dict | None = None):
+    kwargs: dict = {"timeout": timeout}
+    if headers:
+        kwargs["headers"] = headers
     if session is not None:
-        return session.get(url, timeout=timeout)
+        return session.get(url, **kwargs)
     from curl_cffi import requests
 
-    return requests.get(url, impersonate="chrome", timeout=timeout)
+    return requests.get(url, impersonate="chrome", **kwargs)
 
 
 class SubsceneClient:

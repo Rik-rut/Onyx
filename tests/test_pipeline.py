@@ -563,3 +563,143 @@ def test_resolve_content_rpc_fallback(tmp_path, monkeypatch):
     assert resolved == file_path
 
 
+def test_download_magnet_uri(tmp_path, monkeypatch):
+    cfg = make_cfg(tmp_path)
+    added_magnets = []
+
+    class RpcMock:
+        async def add_magnet(self, uri, dl_dir):
+            added_magnets.append((uri, dl_dir))
+            return {
+                "torrent-added": {
+                    "hashString": "11112222333344445555",
+                    "name": "Inception 2010",
+                }
+            }
+
+        async def set_speed_limits(self, **kwargs):
+            return {}
+
+    monkeypatch.setattr(pipeline, "_rpc", lambda c: RpcMock())
+
+    mag = "magnet:?xt=urn:btih:11112222333344445555&dn=Inception+2010"
+    h = asyncio.run(pipeline.download_magnet(mag, cfg))
+    assert h == "11112222333344445555"
+    assert len(added_magnets) == 1
+
+    db = pipeline._db(cfg)
+    rec = db.get_download("11112222333344445555")
+    assert rec is not None
+    assert rec["state"] == "downloading"
+    assert rec["media_type"] == "movie"
+    db.close()
+
+
+def test_download_magnet_torrent_file(tmp_path, monkeypatch):
+    cfg = make_cfg(tmp_path)
+    torrent_file = tmp_path / "Breaking.Bad.S01E01.720p.torrent"
+    torrent_file.write_bytes(b"dummy torrent bytes")
+
+    class RpcMock:
+        async def add_magnet(self, uri, dl_dir):
+            return {
+                "torrent-added": {
+                    "hashString": "bbbb2222333344445555",
+                    "name": "Breaking Bad S01E01",
+                }
+            }
+
+        async def set_speed_limits(self, **kwargs):
+            return {}
+
+    monkeypatch.setattr(pipeline, "_rpc", lambda c: RpcMock())
+
+    h = asyncio.run(pipeline.download_magnet(str(torrent_file), cfg))
+    assert h == "bbbb2222333344445555"
+
+    db = pipeline._db(cfg)
+    rec = db.get_download("bbbb2222333344445555")
+    assert rec is not None
+    assert rec["media_type"] == "tv"
+    assert rec["season"] == 1
+    assert rec["episode"] == 1
+    db.close()
+
+
+def test_pause_resume_priority(tmp_path, monkeypatch):
+    cfg = make_cfg(tmp_path)
+    db = pipeline._db(cfg)
+    db.add_download("testpausehash", media_type="movie", title="Pause Movie")
+    db.close()
+
+    rpc_actions = []
+
+    class RpcMock:
+        async def pause_torrent(self, h):
+            rpc_actions.append(("pause", h))
+            return {}
+
+        async def resume_torrent(self, h):
+            rpc_actions.append(("resume", h))
+            return {}
+
+        async def set_torrent_priority(self, h, pri):
+            rpc_actions.append(("priority", h, pri))
+            return {}
+
+    monkeypatch.setattr(pipeline, "_rpc", lambda c: RpcMock())
+
+    # Pause
+    asyncio.run(pipeline.pause_download("testpausehash", cfg))
+    assert rpc_actions[-1] == ("pause", "testpausehash")
+    db = pipeline._db(cfg)
+    assert db.get_download("testpausehash")["state"] == "paused"
+    db.close()
+
+    # Resume
+    asyncio.run(pipeline.resume_download("testpausehash", cfg))
+    assert rpc_actions[-1] == ("resume", "testpausehash")
+    db = pipeline._db(cfg)
+    assert db.get_download("testpausehash")["state"] == "downloading"
+    db.close()
+
+    # Priority
+    asyncio.run(pipeline.set_download_priority("testpausehash", "top", cfg))
+    assert rpc_actions[-1] == ("priority", "testpausehash", "top")
+
+
+def test_apply_speed_limits(tmp_path):
+    cfg = make_cfg(tmp_path)
+    cfg.values["max_download_speed_kbps"] = 2500
+    cfg.values["max_upload_speed_kbps"] = 500
+
+    limits_applied = {}
+
+    class RpcMock:
+        async def set_speed_limits(self, download_kbps=0, upload_kbps=0):
+            limits_applied["down"] = download_kbps
+            limits_applied["up"] = upload_kbps
+            return {}
+
+    asyncio.run(pipeline.apply_speed_limits(RpcMock(), cfg))
+    assert limits_applied == {"down": 2500, "up": 500}
+
+
+def test_check_disk_space(tmp_path, monkeypatch):
+    from arr.pipeline import check_disk_space
+
+    class StatMock:
+        free = 10 * (1024**3)  # 10 GB
+
+    monkeypatch.setattr("shutil.disk_usage", lambda p: StatMock())
+
+    has_space, free_b, req_b = check_disk_space(tmp_path, 5 * (1024**3))
+    assert has_space is True
+    assert free_b == 10 * (1024**3)
+    assert req_b == 5 * (1024**3)
+
+    has_space, free_b, req_b = check_disk_space(tmp_path, 20 * (1024**3))
+    assert has_space is False
+
+
+

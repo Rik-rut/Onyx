@@ -108,6 +108,85 @@ def test_ensure_daemon_already_running_returns_none_or_managed(monkeypatch):
     assert res is None or isinstance(res, Daemon)
 
 
+def test_rpc_pause_resume():
+    c = RpcClient("127.0.0.1", 9091, "u", "p")
+    requested = []
+
+    async def fake_request(method, args=None):
+        requested.append((method, args))
+        if method == "torrent-get":
+            return {"torrents": [{"id": 5, "hashString": "abc12345"}]}
+        return {"result": "success"}
+
+    c._request = fake_request
+    asyncio.run(c.pause_torrent("abc12345"))
+    assert requested[-1] == ("torrent-stop", {"ids": [5]})
+
+    asyncio.run(c.resume_torrent("abc12345"))
+    assert requested[-1] == ("torrent-start", {"ids": [5]})
+
+
+def test_rpc_queue_movement_and_priority():
+    c = RpcClient("127.0.0.1", 9091, "u", "p")
+    requested = []
+
+    async def fake_request(method, args=None):
+        requested.append((method, args))
+        if method == "torrent-get":
+            return {"torrents": [{"id": 7, "hashString": "hash777"}]}
+        return {"result": "success"}
+
+    c._request = fake_request
+    asyncio.run(c.set_torrent_priority("hash777", "top"))
+    assert requested[-1] == ("queue-move-top", {"ids": [7]})
+
+    asyncio.run(c.set_torrent_priority("hash777", "up"))
+    assert requested[-1] == ("queue-move-up", {"ids": [7]})
+
+    asyncio.run(c.set_torrent_priority("hash777", "down"))
+    assert requested[-1] == ("queue-move-down", {"ids": [7]})
+
+    asyncio.run(c.set_torrent_priority("hash777", "bottom"))
+    assert requested[-1] == ("queue-move-bottom", {"ids": [7]})
+
+    asyncio.run(c.set_torrent_priority("hash777", "high"))
+    assert requested[-1] == ("torrent-set", {"ids": [7], "bandwidthPriority": 1})
+
+    asyncio.run(c.set_torrent_priority("hash777", "low"))
+    assert requested[-1] == ("torrent-set", {"ids": [7], "bandwidthPriority": -1})
+
+
+def test_rpc_speed_limits():
+    c = RpcClient("127.0.0.1", 9091, "u", "p")
+    requested = []
+
+    async def fake_request(method, args=None):
+        requested.append((method, args))
+        return {"result": "success"}
+
+    c._request = fake_request
+    asyncio.run(c.set_speed_limits(download_kbps=500, upload_kbps=100))
+    assert requested[-1] == (
+        "session-set",
+        {
+            "speed-limit-down-enabled": True,
+            "speed-limit-down": 500,
+            "speed-limit-up-enabled": True,
+            "speed-limit-up": 100,
+        },
+    )
+
+    asyncio.run(c.set_speed_limits(download_kbps=0, upload_kbps=0))
+    assert requested[-1] == (
+        "session-set",
+        {
+            "speed-limit-down-enabled": False,
+            "speed-limit-up-enabled": False,
+        },
+    )
+
+
+
 
 @pytest.mark.integration
 @pytest.mark.skipif(shutil.which("transmission-daemon") is None, reason="no daemon binary")

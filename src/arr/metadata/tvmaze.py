@@ -94,6 +94,15 @@ class TvmazeClient:
             genres = show.get("genres") or []
             network_obj = show.get("network") or show.get("webChannel") or {}
             network_name = network_obj.get("name") if isinstance(network_obj, dict) else ""
+            img_obj = show.get("image") or {}
+            poster = (
+                (img_obj.get("medium") or img_obj.get("original") or "")
+                if isinstance(img_obj, dict)
+                else ""
+            )
+            rating_obj = show.get("rating") or {}
+            rating = rating_obj.get("average") if isinstance(rating_obj, dict) else None
+            summary = str(show.get("summary") or "")
             out.append(
                 {
                     "id": int(show["id"]),
@@ -105,6 +114,9 @@ class TvmazeClient:
                     "genres": genres,
                     "network": network_name or "",
                     "externals": show.get("externals") or {},
+                    "poster": poster,
+                    "rating": rating,
+                    "summary": summary,
                 }
             )
         return out

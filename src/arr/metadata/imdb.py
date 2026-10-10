@@ -144,6 +144,8 @@ class ImdbClient:
             if not tid.startswith("tt") or not title or tid in seen:
                 continue
             seen.add(tid)
+            i_obj = item.get("i") or {}
+            poster = i_obj.get("imageUrl", "") if isinstance(i_obj, dict) else ""
             results.append(
                 {
                     "id": tid,
@@ -152,6 +154,7 @@ class ImdbClient:
                     "year": item.get("y"),
                     "type": item.get("q") or "Feature",
                     "stars": item.get("s") or "",
+                    "poster": poster,
                 }
             )
             if len(results) >= 10:

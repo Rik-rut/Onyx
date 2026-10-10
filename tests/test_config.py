@@ -55,7 +55,7 @@ def test_config_template_documents_every_default_key():
 
     from arr.config.settings import CONFIG_TEMPLATE, DEFAULTS
 
-    tmpl_keys = set(re.findall(r"^([a-z_]+)\s*=", CONFIG_TEMPLATE, re.M))
+    tmpl_keys = set(re.findall(r"^([a-z0-9_]+)\s*=", CONFIG_TEMPLATE, re.M))
     missing = set(DEFAULTS) - tmpl_keys
     assert not missing, f"undocumented default keys: {sorted(missing)}"
 
@@ -70,3 +70,29 @@ def test_config_template_round_trips(tmp_path):
     assert cfg.get("resolutions") == ["2160p", "1080p", "720p"]
     assert cfg.get("request_interval_seconds") == {"yts": 1.0, "eztv": 1.0, "nyaa": 2.0}
     assert cfg.get("imdb_suggestion_base_url", "").startswith("https://")
+
+
+def test_save_config_round_trip(tmp_path):
+    from arr.config.settings import Config, load_config, save_config
+
+    p = tmp_path / "custom_config.toml"
+    cfg = Config()
+    cfg.values["download_root"] = "/custom/downloads"
+    cfg.values["library_root"] = "/custom/library"
+    cfg.values["import_mode"] = "move"
+    cfg.values["max_concurrent_downloads"] = 5
+    cfg.values["prefer_season_packs"] = False
+    cfg.values["resolutions"] = ["1080p", "720p"]
+    cfg.values["max_download_speed_kbps"] = 1000
+
+    save_config(cfg, p)
+    assert p.exists()
+
+    loaded = load_config(p)
+    assert loaded.get("download_root") == "/custom/downloads"
+    assert loaded.get("library_root") == "/custom/library"
+    assert loaded.get("import_mode") == "move"
+    assert loaded.get("max_concurrent_downloads") == 5
+    assert loaded.get("prefer_season_packs") is False
+    assert loaded.get("resolutions") == ["1080p", "720p"]
+    assert loaded.get("max_download_speed_kbps") == 1000

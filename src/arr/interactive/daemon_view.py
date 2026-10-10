@@ -112,15 +112,17 @@ def interactive_daemon(cfg: Config, c: Console | None = None) -> None:
         target.print("  [1] Refresh Status")
         if not connected and daemon_bin:
             target.print("  [2] Start Transmission Daemon Process")
+        target.print("  [w] Open Transmission Web UI in Browser")
         target.print("  [b] Back to Main Menu")
 
         choice = prompt_text("Choose action", default="1", allow_back=True, c=target)
         if not choice or choice.lower() in ("b", "back"):
             return
 
-        if choice == "1":
+        choice_clean = choice.strip().lower()
+        if choice_clean == "1":
             continue
-        elif choice == "2" and not connected and daemon_bin:
+        elif choice_clean == "2" and not connected and daemon_bin:
             target.print(f"[cyan]Starting transmission-daemon on port {port}...[/cyan]")
             try:
                 daemon_proc = Daemon(download_dir=download_dir, port=port)
@@ -129,6 +131,13 @@ def interactive_daemon(cfg: Config, c: Console | None = None) -> None:
                 target.print("[bold green]Started daemon. Refreshing status...[/bold green]")
             except Exception as e:
                 target.print(f"[bold red]Failed to start daemon: {e}[/bold red]")
+            prompt_text("Press Enter to continue", allow_back=False, c=target)
+        elif choice_clean in ("w", "web"):
+            web_url = f"http://{host}:{port}/transmission/web/"
+            target.print(f"[cyan]Opening Transmission Web UI: {web_url}[/cyan]")
+            import webbrowser
+
+            webbrowser.open(web_url)
             prompt_text("Press Enter to continue", allow_back=False, c=target)
         else:
             target.print(f"[red]Unknown choice '{choice}'.[/red]")

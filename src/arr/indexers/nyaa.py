@@ -16,7 +16,7 @@ class NyaaAdapter:
         self.http = http
 
     def supports(self, media_type: MediaType) -> bool:
-        return media_type == MediaType.TV
+        return media_type in (MediaType.TV, MediaType.MOVIE)
 
     async def search(self, q: Query) -> list[Release]:
         url = f"{self.base_url}/"
@@ -73,7 +73,7 @@ class NyaaAdapter:
                         title=title,
                         infohash=clean_hash,
                         magnet=magnet,
-                        media_type=MediaType.TV,
+                        media_type=q.media_type or MediaType.TV,
                         seeds=_to_int(seeders) or 0,
                         peers=_to_int(leechers) or 0,
                         size_bytes=_parse_size(size),

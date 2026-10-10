@@ -152,3 +152,64 @@ def test_single_file_movie_imports_adjacent_matching_subtitles(tmp_path):
     assert len(subs_in_dest) == 1
     assert subs_in_dest[0].read_text() == "Movie A subtitle text"
 
+
+def test_inspect_media_streams_and_has_embedded_subtitles(tmp_path, monkeypatch):
+    import json
+    from unittest.mock import MagicMock
+
+    from arr.importer.layout import has_embedded_subtitles, inspect_media_streams
+
+    media = tmp_path / "movie.mkv"
+    media.write_bytes(b"\x00" * 1024)
+
+    fake_streams_json = json.dumps({
+        "streams": [
+            {
+                "index": 0,
+                "codec_name": "h264",
+                "codec_type": "video",
+                "disposition": {"default": 1, "forced": 0},
+            },
+            {
+                "index": 1,
+                "codec_name": "aac",
+                "codec_type": "audio",
+                "tags": {"language": "eng"},
+                "disposition": {"default": 1, "forced": 0},
+            },
+            {
+                "index": 2,
+                "codec_name": "subrip",
+                "codec_type": "subtitle",
+                "tags": {"language": "eng", "title": "English SDH"},
+                "disposition": {"default": 0, "forced": 0},
+            },
+        ]
+    })
+
+    mock_run = MagicMock(return_value=MagicMock(stdout=fake_streams_json))
+    monkeypatch.setattr("subprocess.run", mock_run)
+    monkeypatch.setattr("arr.importer.layout._find_ffprobe", lambda: "ffprobe")
+
+    streams = inspect_media_streams(media)
+    assert len(streams["video"]) == 1
+    assert len(streams["audio"]) == 1
+    assert len(streams["subtitle"]) == 1
+    assert streams["subtitle"][0]["language"] == "eng"
+    assert streams["subtitle"][0]["codec_name"] == "subrip"
+
+    assert has_embedded_subtitles(media, "en") is True
+    assert has_embedded_subtitles(media, "es") is False
+
+
+def test_inspect_media_streams_ffprobe_missing(tmp_path, monkeypatch):
+    from arr.importer.layout import has_embedded_subtitles, inspect_media_streams
+
+    media = tmp_path / "movie.mkv"
+    media.write_bytes(b"\x00" * 1024)
+
+    monkeypatch.setattr("arr.importer.layout._find_ffprobe", lambda: None)
+    streams = inspect_media_streams(media)
+    assert streams == {"video": [], "audio": [], "subtitle": []}
+    assert has_embedded_subtitles(media, "en") is False
+

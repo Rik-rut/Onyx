@@ -162,3 +162,173 @@ def test_yify_download_follows_intermediate_page():
     )
     data = client.download(cand)
     assert b"Inception sub" in data
+
+
+def test_addic7ed_search_and_download():
+    from arr.subtitles.addic7ed import Addic7edClient
+
+    search_html = """
+    <html><body>
+    <a href="/serie/Breaking_Bad/1/1/Pilot">Breaking Bad - 01x01 - Pilot</a>
+    </body></html>
+    """
+
+    episode_html = """
+    <html><body>
+    <table class="tabel95">
+        <tr><td class="NewsTitle">Version 720p HDTV, Duration: 48.00</td></tr>
+        <tr>
+            <td class="language">English</td>
+            <td>123 Downloads</td>
+            <td><a href="/updated/1/6159/1">Most Updated</a></td>
+        </tr>
+    </table>
+    </body></html>
+    """
+
+    srt_bytes = b"1\r\n00:00:01,000 --> 00:00:04,000\nHello from Addic7ed\n"
+
+    class FakeSession:
+        def get(self, url, timeout=20, headers=None):
+            class Resp:
+                def __init__(self, text, content, status_code=200):
+                    self.text = text
+                    self.content = content
+                    self.status_code = status_code
+
+            if "search.php" in url:
+                return Resp(search_html, search_html.encode())
+            if "/serie/Breaking_Bad/1/1/Pilot" in url:
+                return Resp(episode_html, episode_html.encode())
+            if "/updated/1/6159/1" in url:
+                return Resp("", srt_bytes)
+            raise ValueError(f"Unexpected url {url}")
+
+    client = Addic7edClient(session=FakeSession())
+    cands = client.search(title="Breaking Bad (2008)", season=1, episode=1, languages=["en"])
+    assert len(cands) == 1
+    c = cands[0]
+    assert c.language == "en"
+    assert "Breaking Bad S01E01 720p HDTV" in c.release_name
+    assert c.downloads == 123
+    assert c.download_link == "https://www.addic7ed.com/updated/1/6159/1"
+
+    data = client.download(c)
+    assert b"Hello from Addic7ed" in data
+
+
+def test_subdl_search_and_download():
+    from arr.subtitles.subdl import SubdlClient
+
+    no_key_client = SubdlClient(api_key="")
+    assert no_key_client.search(title="Inception") == []
+
+    class FakeSession:
+        def get(self, url, timeout=20, headers=None):
+            class Resp:
+                status_code = 200
+
+                def json(self):
+                    return {
+                        "status": True,
+                        "subtitles": [
+                            {
+                                "release_name": "Inception.2010.1080p",
+                                "lang": "English",
+                                "url": "/subtitles/123.srt",
+                                "download_count": 55,
+                                "hi": True,
+                            }
+                        ],
+                    }
+
+                content = b"1\n00:00:01,000 --> 00:00:03,000\nSubDL sub\n"
+
+            return Resp()
+
+    client = SubdlClient(api_key="testkey", session=FakeSession())
+    cands = client.search(title="Inception", languages=["en"])
+    assert len(cands) == 1
+    assert cands[0].release_name == "Inception.2010.1080p"
+    assert cands[0].hearing_impaired is True
+    assert cands[0].download_link == "https://dl.subdl.com/subtitles/123.srt"
+
+    data = client.download(cands[0])
+    assert b"SubDL sub" in data
+
+
+def test_ensure_subtitles_embedded_detected(tmp_path, monkeypatch):
+    from arr.config.settings import Config
+    from arr.db import DB
+    from arr.subtitles.service import ensure_subtitles
+
+    media = tmp_path / "movie.mkv"
+    media.write_bytes(b"\x00" * 1024)
+
+    db = DB(tmp_path / "test.db")
+    cfg = Config()
+
+    monkeypatch.setattr(
+        "arr.subtitles.service.has_embedded_subtitles",
+        lambda p, lang: True,
+    )
+
+    res = ensure_subtitles(media, cfg=cfg, db=db, release_name="Movie")
+    assert len(res) == 1
+    assert res[0]["source"] == "embedded"
+    assert res[0]["state"] == "ok"
+    assert res[0]["path"] == str(media)
+
+    subs = db.list_subtitles(str(media))
+    assert len(subs) == 1
+    assert subs[0]["source"] == "embedded"
+    assert subs[0]["state"] == "ok"
+    db.close()
+
+
+def test_ensure_subtitles_tv_falls_back_to_addic7ed(tmp_path, monkeypatch):
+    from arr.config.settings import Config
+    from arr.db import DB
+    from arr.subtitles.base import SubtitleCandidate
+    from arr.subtitles.service import ensure_subtitles
+
+    media = tmp_path / "Show - S01E01.mkv"
+    media.write_bytes(b"\x00" * 1024)
+
+    db = DB(tmp_path / "test.db")
+    cfg = Config()
+
+    monkeypatch.setattr("arr.subtitles.service.has_embedded_subtitles", lambda p, lang: False)
+
+    fake_cand = SubtitleCandidate(
+        subtitle_id=888,
+        file_id=888,
+        language="en",
+        release_name="Show S01E01 720p",
+        downloads=100,
+        hearing_impaired=False,
+        hd=True,
+        upload_date="",
+        download_link="http://example.com/sub.srt",
+    )
+
+    class FakeAddic7ed:
+        def search(self, **kwargs):
+            return [fake_cand]
+
+        def download(self, cand):
+            return b"1\n00:00:01,000 --> 00:00:02,000\nTV sub\n"
+
+    monkeypatch.setattr("arr.subtitles.service.Addic7edClient", lambda base: FakeAddic7ed())
+
+    res = ensure_subtitles(
+        media, cfg=cfg, db=db, season=1, episode=1, release_name="Show S01E01"
+    )
+    assert len(res) == 1
+    assert res[0]["source"] == "addic7ed"
+    assert res[0]["state"] == "ok"
+    srt_file = tmp_path / "Show - S01E01.en.srt"
+    assert srt_file.exists()
+    assert srt_file.read_bytes() == b"1\n00:00:01,000 --> 00:00:02,000\nTV sub\n"
+    db.close()
+

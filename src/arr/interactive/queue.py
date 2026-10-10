@@ -11,7 +11,14 @@ from arr.interactive.ui import (
     prompt_text,
     render_queue_table,
 )
-from arr.pipeline import cancel_download, import_download, list_queue
+from arr.pipeline import (
+    cancel_download,
+    import_download,
+    list_queue,
+    pause_download,
+    resume_download,
+    set_download_priority,
+)
 from arr.transmission.process import RpcClient
 
 if TYPE_CHECKING:
@@ -76,6 +83,9 @@ def interactive_queue(cfg: Config, c: Console | None = None) -> None:
         target.print("  [2] Cancel a Download")
         target.print("  [3] Manually Import Completed Download")
         target.print("  [4] Live Monitor (Real-time tracking)")
+        target.print("  [5] Pause Download")
+        target.print("  [6] Resume Download")
+        target.print("  [7] Move Queue Priority")
         target.print("  [b] Back to Main Menu")
 
         choice = prompt_text("Choose action", default="1", allow_back=True, c=target)
@@ -143,6 +153,75 @@ def interactive_queue(cfg: Config, c: Console | None = None) -> None:
                     target.print(f"[bold red]Import failed with exit code {e.code}.[/bold red]")
             except Exception as e:
                 target.print(f"[bold red]Import failed: {e}[/bold red]")
+            prompt_text("Press Enter to continue", allow_back=False, c=target)
+
+        elif choice == "5":
+            target.print("\n[bold]Pause Download[/bold]")
+            prompt_label = (
+                f"Enter download index [0-{len(items)-1}] or hash to pause"
+                if items
+                else "Enter download hash to pause"
+            )
+            dl_id = prompt_text(prompt_label, allow_back=True, c=target)
+            if not dl_id:
+                continue
+            target_id = _resolve_download_id(dl_id, items)
+            try:
+                asyncio.run(pause_download(target_id, cfg))
+                target.print(f"[bold green]Paused download '{target_id[:8]}'.[/bold green]")
+            except SystemExit as e:
+                target.print(f"[bold red]Download '{dl_id}' not found (exit {e.code}).[/bold red]")
+            except Exception as e:
+                target.print(f"[bold red]Pause failed: {e}[/bold red]")
+            prompt_text("Press Enter to continue", allow_back=False, c=target)
+
+        elif choice == "6":
+            target.print("\n[bold]Resume Download[/bold]")
+            prompt_label = (
+                f"Enter download index [0-{len(items)-1}] or hash to resume"
+                if items
+                else "Enter download hash to resume"
+            )
+            dl_id = prompt_text(prompt_label, allow_back=True, c=target)
+            if not dl_id:
+                continue
+            target_id = _resolve_download_id(dl_id, items)
+            try:
+                asyncio.run(resume_download(target_id, cfg))
+                target.print(f"[bold green]Resumed download '{target_id[:8]}'.[/bold green]")
+            except SystemExit as e:
+                target.print(f"[bold red]Download '{dl_id}' not found (exit {e.code}).[/bold red]")
+            except Exception as e:
+                target.print(f"[bold red]Resume failed: {e}[/bold red]")
+            prompt_text("Press Enter to continue", allow_back=False, c=target)
+
+        elif choice == "7":
+            target.print("\n[bold]Move Queue Priority[/bold]")
+            prompt_label = (
+                f"Enter download index [0-{len(items)-1}] or hash"
+                if items
+                else "Enter download hash"
+            )
+            dl_id = prompt_text(prompt_label, allow_back=True, c=target)
+            if not dl_id:
+                continue
+            target_id = _resolve_download_id(dl_id, items)
+            pri = prompt_text(
+                "Priority action (top/up/down/bottom/high/low)",
+                default="up",
+                allow_back=True,
+                c=target,
+            )
+            if not pri:
+                continue
+            try:
+                asyncio.run(set_download_priority(target_id, pri, cfg))
+                short_id = target_id[:8]
+                target.print(f"[bold green]Set priority '{pri}' for '{short_id}'.[/bold green]")
+            except SystemExit as e:
+                target.print(f"[bold red]Download '{dl_id}' not found (exit {e.code}).[/bold red]")
+            except Exception as e:
+                target.print(f"[bold red]Priority update failed: {e}[/bold red]")
             prompt_text("Press Enter to continue", allow_back=False, c=target)
 
         else:

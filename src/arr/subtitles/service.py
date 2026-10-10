@@ -7,7 +7,10 @@ from pathlib import Path
 
 from arr.config.settings import Config
 from arr.db import DB
-from arr.subtitles.base import SubtitleError, rank_candidates
+from arr.importer.layout import has_embedded_subtitles
+from arr.subtitles.addic7ed import Addic7edClient
+from arr.subtitles.base import SubtitleError, SubtitleProvider, rank_candidates
+from arr.subtitles.subdl import SubdlClient
 from arr.subtitles.subscene import SubsceneClient
 from arr.subtitles.yify import YifySubtitlesClient
 
@@ -62,8 +65,9 @@ def ensure_subtitles(
 ) -> list[dict]:
     """Ensure <media basename>.<lang>.<ext> exists next to the media file.
 
-    Priority: sibling subtitle already next to the file (imported by importer) →
-    Subscene → YIFY fallback → record missing. Returns list of db records.
+    Priority: embedded subtitle track in container -> sibling subtitle already
+    next to the file -> TV provider (Addic7ed / SubDL) / Movie provider (YIFY / SubDL)
+    -> Subscene fallback -> record missing. Returns list of db records.
     """
     results: list[dict] = []
     if not cfg.get("subtitles_enabled", True):
@@ -73,7 +77,15 @@ def ensure_subtitles(
     base = media_path.with_suffix("")
 
     for lang in languages:
-        # 1) sibling/embedded already placed by the importer
+        # 0) Embedded subtitle track in the media file container
+        if has_embedded_subtitles(media_path, lang):
+            db.add_subtitle(str(media_path), lang, "embedded", "ok", None)
+            results.append(
+                {"language": lang, "path": str(media_path), "source": "embedded", "state": "ok"}
+            )
+            continue
+
+        # 1) Sibling subtitle already placed by the importer
         for ext in (".srt", ".ass", ".sub", ".vtt"):
             cand = media_path.parent / f"{base.name}.{lang}{ext}"
             if cand.exists():
@@ -89,14 +101,30 @@ def ensure_subtitles(
                 )
                 break
         else:
-            # 2) Subscene → YIFY fallback
+            # 2) External subtitle providers
+            addic7ed_base = str(cfg.get("addic7ed_base_url", "https://www.addic7ed.com"))
+            subdl_base = str(cfg.get("subdl_base_url", "https://api.subdl.com"))
+            subdl_key = str(cfg.get("subdl_api_key", ""))
             subscene_base = str(cfg.get("subscene_base_url", "https://subscene.com"))
             yify_base = str(cfg.get("yify_subtitles_base_url", "https://yifysubtitles.ch"))
+
+            is_tv = season is not None and episode is not None
+            providers: list[tuple[str, SubtitleProvider]]
+            if is_tv:
+                providers = [
+                    ("addic7ed", Addic7edClient(addic7ed_base)),
+                    ("subdl", SubdlClient(subdl_base, api_key=subdl_key)),
+                    ("subscene", SubsceneClient(subscene_base)),
+                ]
+            else:
+                providers = [
+                    ("yify", YifySubtitlesClient(yify_base)),
+                    ("subdl", SubdlClient(subdl_base, api_key=subdl_key)),
+                    ("subscene", SubsceneClient(subscene_base)),
+                ]
+
             placed = False
-            for source, client in (
-                ("subscene", SubsceneClient(subscene_base)),
-                ("yify", YifySubtitlesClient(yify_base)),
-            ):
+            for source, client in providers:
                 try:
                     cands = client.search(
                         imdb_id=imdb_id,
