@@ -310,6 +310,28 @@ def test_download_release_propagates_metadata(client: TestClient) -> None:
         assert kwargs["tmdb_id"] == 27205
 
 
+def test_download_release_with_imdb_id_in_tmdb_field(client: TestClient) -> None:
+    with patch(
+        "arr.web.routes.queue.enqueue_release", new_callable=AsyncMock, return_value="added"
+    ) as mock_enq:
+        payload = {
+            "indexer": "yts",
+            "title": "Movie.2020.1080p",
+            "infohash": "hash_tt",
+            "magnet": "magnet:?xt=urn:btih:hash_tt",
+            "media_type": "movie",
+            "size_bytes": 1500000000,
+            "tmdb_id": "tt1302011",  # Passed string IMDb ID in tmdb_id field
+        }
+        resp = client.post("/api/queue/download/release", json=payload)
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "queued"
+        mock_enq.assert_called_once()
+        _, kwargs = mock_enq.call_args
+        assert kwargs["imdb_id"] == "tt1302011"
+        assert kwargs["tmdb_id"] is None
+
+
 def test_update_config_subtitle_fields(client: TestClient) -> None:
     payload = {
         "subtitles_enabled": False,

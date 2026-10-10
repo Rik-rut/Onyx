@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 from arr.core.models import MediaType, Release
 from arr.pipeline import _rpc, download_magnet, enqueue_release
@@ -130,6 +130,24 @@ class DownloadReleaseRequest(BaseModel):
     episode: int | None = None
     imdb_id: str | None = None
     tmdb_id: int | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_identifiers(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            raw_tmdb = data.get("tmdb_id")
+            raw_imdb = data.get("imdb_id")
+            # If tmdb_id was passed an IMDb format string (e.g. "tt1302011")
+            if isinstance(raw_tmdb, str) and raw_tmdb.startswith("tt"):
+                if not raw_imdb:
+                    data["imdb_id"] = raw_tmdb
+                data["tmdb_id"] = None
+            elif raw_tmdb is not None:
+                try:
+                    data["tmdb_id"] = int(raw_tmdb)
+                except (ValueError, TypeError):
+                    data["tmdb_id"] = None
+        return data
 
 
 @router.post("/download/release")

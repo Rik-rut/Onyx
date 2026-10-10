@@ -806,8 +806,19 @@
 
         async function downloadRelease(r) {
           try {
-            const imdb = selectedItem.value.imdb_id || (tvDetails.value && tvDetails.value.imdb_id) || null;
-            const tmdb = selectedItem.value.id || (tvDetails.value && tvDetails.value.id) || null;
+            let imdb = selectedItem.value.imdb_id || (tvDetails.value && tvDetails.value.imdb_id) || null;
+            if (!imdb && typeof selectedItem.value.id === 'string' && selectedItem.value.id.startsWith('tt')) {
+              imdb = selectedItem.value.id;
+            }
+            let tmdb = null;
+            if (searchType.value === 'tv') {
+              const rawId = (tvDetails.value && tvDetails.value.id) || selectedItem.value.id;
+              const parsed = parseInt(rawId, 10);
+              if (!isNaN(parsed)) tmdb = parsed;
+            } else if (selectedItem.value.tmdb_id) {
+              const parsed = parseInt(selectedItem.value.tmdb_id, 10);
+              if (!isNaN(parsed)) tmdb = parsed;
+            }
             const body = {
               indexer: r.indexer,
               title: r.title,
