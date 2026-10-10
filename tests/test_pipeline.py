@@ -466,3 +466,49 @@ def test_staging_dir_direct_destination_no_incomplete(tmp_path):
     assert movie_dir.exists()
     assert tv_dir.exists()
 
+
+def test_list_queue_excludes_skipped(tmp_path):
+    cfg = make_cfg(tmp_path)
+    db = pipeline._db(cfg)
+    db.add_download(
+        "active".ljust(40, "0"), media_type="movie", title="Active", state="downloading"
+    )
+    db.add_download(
+        "skipped".ljust(40, "0"), media_type="movie", title="Cancelled", state="skipped"
+    )
+    db.close()
+
+    items = pipeline.list_queue(cfg)
+    titles = [it["title"] for it in items]
+    assert "Active" in titles
+    assert "Cancelled" not in titles
+
+
+def test_enqueue_release_allows_redownloading_skipped(tmp_path, monkeypatch):
+    cfg = make_cfg(tmp_path)
+    db = pipeline._db(cfg)
+    rel = fake_release(1)
+    db.add_download(rel.infohash, media_type="tv", title="Old", state="skipped")
+    db.close()
+
+    class Rpc:
+        def __init__(self, *a, **k):
+            pass
+
+        async def list_torrents(self):
+            return []
+
+        async def add_magnet(self, *a, **k):
+            return {"id": 1}
+
+    monkeypatch.setattr(pipeline, "_rpc", lambda c: Rpc())
+
+    ok, msg = asyncio.run(pipeline.enqueue_release(rel, cfg, media_type="tv"))
+    assert ok is True
+    assert "downloading" in msg.lower() or "queued" in msg.lower()
+
+    db2 = pipeline._db(cfg)
+    rec = db2.get_download(rel.infohash)
+    assert rec["state"] in ("added", "downloading", "queued")
+    db2.close()
+

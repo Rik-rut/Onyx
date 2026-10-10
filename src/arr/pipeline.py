@@ -244,7 +244,7 @@ async def download_movie(
             return
     db = _db(cfg)
     existing = db.get_download(chosen.infohash)
-    if existing and not force:
+    if existing and existing.get("state") not in ("skipped", "failed") and not force:
         print(f"Already known (state={existing['state']}); use --force to re-add.")
         db.close()
         return
@@ -267,17 +267,33 @@ async def download_movie(
         print(str(e), file=sys.stderr)
         db.close()
         raise SystemExit(4)
-    db.add_download(
-        chosen.infohash,
-        media_type="movie",
-        tmdb_id=chosen.tmdb_id,
-        imdb_id=chosen.imdb_id,
-        title=chosen.title,
-        year=chosen.year,
-        indexer=chosen.indexer,
-        download_dir=str(staging),
-        state="queued" if paused else "added",
-    )
+    new_state = "queued" if paused else "added"
+    if existing:
+        db.set_download_state(
+            chosen.infohash,
+            new_state,
+            media_type="movie",
+            tmdb_id=chosen.tmdb_id,
+            imdb_id=chosen.imdb_id,
+            title=chosen.title,
+            year=chosen.year,
+            indexer=chosen.indexer,
+            download_dir=str(staging),
+            content_path=None,
+            destination_path=None,
+        )
+    else:
+        db.add_download(
+            chosen.infohash,
+            media_type="movie",
+            tmdb_id=chosen.tmdb_id,
+            imdb_id=chosen.imdb_id,
+            title=chosen.title,
+            year=chosen.year,
+            indexer=chosen.indexer,
+            download_dir=str(staging),
+            state=new_state,
+        )
     if paused:
         print("Queued (max_concurrent_downloads reached).")
     if no_wait:
@@ -401,7 +417,7 @@ async def _enqueue_tv_scope_by_search(query, cfg, db, *, season, episode, force=
         return 0
     chosen = releases[0]
     existing = db.get_download(chosen.infohash)
-    if existing and not force:
+    if existing and existing.get("state") not in ("skipped", "failed") and not force:
         return 0
     staging = _staging_dir(cfg, "tv")
     try:
@@ -409,16 +425,30 @@ async def _enqueue_tv_scope_by_search(query, cfg, db, *, season, episode, force=
     except DependencyUnavailable as e:
         print(str(e), file=sys.stderr)
         raise SystemExit(4)
-    db.add_download(
-        chosen.infohash,
-        media_type="tv",
-        title=chosen.title,
-        season=season,
-        episode=episode,
-        indexer=chosen.indexer,
-        download_dir=str(staging),
-        state="added",
-    )
+    if existing:
+        db.set_download_state(
+            chosen.infohash,
+            "added",
+            media_type="tv",
+            title=chosen.title,
+            season=season,
+            episode=episode,
+            indexer=chosen.indexer,
+            download_dir=str(staging),
+            content_path=None,
+            destination_path=None,
+        )
+    else:
+        db.add_download(
+            chosen.infohash,
+            media_type="tv",
+            title=chosen.title,
+            season=season,
+            episode=episode,
+            indexer=chosen.indexer,
+            download_dir=str(staging),
+            state="added",
+        )
     return 1
 
 
@@ -493,7 +523,10 @@ async def _enqueue_episodes(
                     pack = pick_season_pack(accepted)
         if pack is not None:
             covered = [ep for ep, _ in per_episode]
-            if pack.infohash in seen_hashes or db.get_download(pack.infohash):
+            ex_pack = db.get_download(pack.infohash)
+            if pack.infohash in seen_hashes or (
+                ex_pack and ex_pack.get("state") not in ("skipped", "failed")
+            ):
                 for ep in season_eps:
                     db.set_episode_state(
                         series.tmdb_id, ep.season_number, ep.episode_number, "imported",
@@ -504,7 +537,10 @@ async def _enqueue_episodes(
             plans.append((covered if covered else list(season_eps), pack))
             continue
         for ep, chosen in per_episode:
-            if chosen.infohash in seen_hashes or db.get_download(chosen.infohash):
+            ex_chosen = db.get_download(chosen.infohash)
+            if chosen.infohash in seen_hashes or (
+                ex_chosen and ex_chosen.get("state") not in ("skipped", "failed")
+            ):
                 db.set_episode_state(
                     series.tmdb_id, ep.season_number, ep.episode_number, "imported",
                     infohash=chosen.infohash,
@@ -533,24 +569,43 @@ async def _enqueue_episodes(
             print(str(e), file=sys.stderr)
             raise SystemExit(4)
         lead = covered[0]
-        db.add_download(
-            chosen.infohash,
-            media_type="tv",
-            tmdb_id=series.tmdb_id,
-            title=series.title,
-            season=lead.season_number,
-            episode=lead.episode_number if len(covered) == 1 else None,
-            episode_title=lead.name if len(covered) == 1 else None,
-            imdb_id=series.imdb_id,
-            year=series.year,
-            indexer=chosen.indexer,
-            download_dir=str(staging),
-            state="queued" if paused else "added",
-        )
-        state = "queued" if paused else "added"
+        new_state = "queued" if paused else "added"
+        existing_dl = db.get_download(chosen.infohash)
+        if existing_dl:
+            db.set_download_state(
+                chosen.infohash,
+                new_state,
+                media_type="tv",
+                tmdb_id=series.tmdb_id,
+                title=series.title,
+                season=lead.season_number,
+                episode=lead.episode_number if len(covered) == 1 else None,
+                episode_title=lead.name if len(covered) == 1 else None,
+                imdb_id=series.imdb_id,
+                year=series.year,
+                indexer=chosen.indexer,
+                download_dir=str(staging),
+                content_path=None,
+                destination_path=None,
+            )
+        else:
+            db.add_download(
+                chosen.infohash,
+                media_type="tv",
+                tmdb_id=series.tmdb_id,
+                title=series.title,
+                season=lead.season_number,
+                episode=lead.episode_number if len(covered) == 1 else None,
+                episode_title=lead.name if len(covered) == 1 else None,
+                imdb_id=series.imdb_id,
+                year=series.year,
+                indexer=chosen.indexer,
+                download_dir=str(staging),
+                state=new_state,
+            )
         for ep in covered:
             db.set_episode_state(
-                series.tmdb_id, ep.season_number, ep.episode_number, state,
+                series.tmdb_id, ep.season_number, ep.episode_number, new_state,
                 infohash=chosen.infohash,
             )
         count += 1
@@ -615,7 +670,7 @@ async def enqueue_release(
     db = _db(cfg)
     try:
         existing = db.get_download(chosen.infohash)
-        if existing and not force:
+        if existing and existing.get("state") not in ("skipped", "failed") and not force:
             return False, f"Already known (state={existing['state']}); use --force to re-add."
         staging = _staging_dir(cfg, media_type)
         rpc = _rpc(cfg)
@@ -637,19 +692,51 @@ async def enqueue_release(
         except Exception as e:
             return False, f"Failed to add magnet: {e}"
 
-        db.add_download(
-            chosen.infohash,
-            media_type=media_type,
-            tmdb_id=tmdb_id or chosen.tmdb_id,
-            imdb_id=imdb_id or chosen.imdb_id,
-            title=chosen.title,
-            year=chosen.year,
-            season=season if season is not None else chosen.season,
-            episode=episode if episode is not None else chosen.episode,
-            indexer=chosen.indexer,
-            download_dir=str(staging),
-            state="queued" if paused else "added",
-        )
+        new_state = "queued" if paused else "added"
+        if existing:
+            db.set_download_state(
+                chosen.infohash,
+                new_state,
+                media_type=media_type,
+                tmdb_id=tmdb_id or chosen.tmdb_id,
+                imdb_id=imdb_id or chosen.imdb_id,
+                title=chosen.title,
+                year=chosen.year,
+                season=season if season is not None else chosen.season,
+                episode=episode if episode is not None else chosen.episode,
+                indexer=chosen.indexer,
+                download_dir=str(staging),
+                content_path=None,
+                destination_path=None,
+            )
+        else:
+            db.add_download(
+                chosen.infohash,
+                media_type=media_type,
+                tmdb_id=tmdb_id or chosen.tmdb_id,
+                imdb_id=imdb_id or chosen.imdb_id,
+                title=chosen.title,
+                year=chosen.year,
+                season=season if season is not None else chosen.season,
+                episode=episode if episode is not None else chosen.episode,
+                indexer=chosen.indexer,
+                download_dir=str(staging),
+                state=new_state,
+            )
+        tid = tmdb_id if tmdb_id is not None else chosen.tmdb_id
+        if (
+            media_type == "tv"
+            and tid is not None
+            and season is not None
+            and episode is not None
+        ):
+            db.set_episode_state(
+                int(tid),
+                int(season),
+                int(episode),
+                new_state,
+                infohash=chosen.infohash,
+            )
         if not paused:
             try:
                 await _promote_queued(cfg, db)
@@ -941,7 +1028,7 @@ def list_queue(cfg):
         # R8: policy evaluation runs on `queue` as well as the daemon tick.
         _sync_rpc_state(cfg, db)
         _apply_seeding_policy(cfg, db)
-        rows = db.list_downloads()
+        rows = [r for r in db.list_downloads() if r.get("state") != "skipped"]
     finally:
         db.close()
     return rows
