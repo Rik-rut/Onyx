@@ -259,3 +259,79 @@ def test_docker_and_compose_spec_validity() -> None:
     assert "/downloads/tv-shows" in compose_content
     assert "/config" in compose_content
     assert "8080" in compose_content
+
+
+def test_favicon(client: TestClient) -> None:
+    resp = client.get("/favicon.ico")
+    assert resp.status_code == 200
+    assert "image/svg+xml" in resp.headers.get("content-type", "")
+    assert "<svg" in resp.text
+
+
+def test_priority_up_and_down(client: TestClient) -> None:
+    with patch("arr.web.routes.queue._get_rpc") as mock_rpc_fn:
+        mock_rpc = AsyncMock()
+        mock_rpc.queue_move_up.return_value = {"result": "success"}
+        mock_rpc.queue_move_down.return_value = {"result": "success"}
+        mock_rpc_fn.return_value = mock_rpc
+
+        resp_up = client.post("/api/queue/42/priority/up")
+        assert resp_up.status_code == 200
+        assert resp_up.json() == {"status": "moved_up", "id": "42"}
+        mock_rpc.queue_move_up.assert_called_once_with(42)
+
+        resp_down = client.post("/api/queue/42/priority/down")
+        assert resp_down.status_code == 200
+        assert resp_down.json() == {"status": "moved_down", "id": "42"}
+        mock_rpc.queue_move_down.assert_called_once_with(42)
+
+
+def test_download_release_propagates_metadata(client: TestClient) -> None:
+    with patch("arr.web.routes.queue.enqueue_release", new_callable=AsyncMock) as mock_enq:
+        mock_enq.return_value = (True, "Queued successfully")
+        payload = {
+            "indexer": "yts",
+            "title": "Inception.2010.1080p",
+            "infohash": "hash123",
+            "magnet": "magnet:?xt=urn:btih:hash123",
+            "media_type": "movie",
+            "seeds": 50,
+            "peers": 10,
+            "size_bytes": 2000000000,
+            "imdb_id": "tt1375666",
+            "tmdb_id": 27205,
+        }
+        resp = client.post("/api/queue/download/release", json=payload)
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "queued"
+        mock_enq.assert_called_once()
+        _, kwargs = mock_enq.call_args
+        assert kwargs["imdb_id"] == "tt1375666"
+        assert kwargs["tmdb_id"] == 27205
+
+
+def test_update_config_subtitle_fields(client: TestClient) -> None:
+    payload = {
+        "subtitles_enabled": False,
+        "subtitles_forced_only": True,
+        "subtitle_languages": ["es", "fr"],
+    }
+    with patch("arr.web.routes.config.save_config"):
+        resp = client.put("/api/config", json=payload)
+        assert resp.status_code == 200
+        cfg = resp.json()["config"]
+        assert cfg["subtitles_enabled"] is False
+        assert cfg["subtitles_forced_only"] is True
+        assert cfg["subtitle_languages"] == ["es", "fr"]
+
+
+def test_index_page_phase6_elements(client: TestClient) -> None:
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert "Rescan Library" in resp.text
+    assert "tvDetails" in resp.text
+    assert "priorityUp" in resp.text
+    assert "priorityDown" in resp.text
+    assert "filteredReleases" in resp.text
+    assert "subtitleLanguagesInput" in resp.text
+

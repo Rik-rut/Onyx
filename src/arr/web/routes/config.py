@@ -27,6 +27,7 @@ class UpdateConfigRequest(BaseModel):
     resolutions: list[str] | None = None
     subtitle_languages: list[str] | None = None
     subtitles_enabled: bool | None = None
+    subtitles_forced_only: bool | None = None
     max_download_speed_kbps: int | None = None
     max_upload_speed_kbps: int | None = None
 

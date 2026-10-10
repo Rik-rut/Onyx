@@ -54,9 +54,35 @@ if errorlevel 1 (
 )
 
 REM No arguments (e.g. Explorer double-click or terminal without flags):
-REM Launch the interactive terminal application (R14).
+REM Default to Web UI first with browser auto-open (R22.4).
 if "%~1"=="" (
-    "%UV%" run arr interactive
+    "%UV%" run arr web --open-browser
+    set "rc=!errorlevel!"
+    popd
+    if not "!rc!"=="0" (
+        echo.
+        echo [arr] arr exited with code !rc!.
+        pause
+    )
+    exit /b !rc!
+)
+
+REM CLI shortcut (run.bat cli or run.bat interactive)
+if /i "%~1"=="cli" (
+    shift
+    "%UV%" run arr interactive %*
+    set "rc=!errorlevel!"
+    popd
+    if not "!rc!"=="0" (
+        echo.
+        echo [arr] arr exited with code !rc!.
+        pause
+    )
+    exit /b !rc!
+)
+if /i "%~1"=="interactive" (
+    shift
+    "%UV%" run arr interactive %*
     set "rc=!errorlevel!"
     popd
     if not "!rc!"=="0" (

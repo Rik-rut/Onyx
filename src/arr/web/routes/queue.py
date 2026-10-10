@@ -89,6 +89,28 @@ async def delete_torrent(request: Request, torrent_id: int) -> dict[str, str]:
         raise HTTPException(status_code=500, detail=f"Failed to remove torrent: {e}") from e
 
 
+@router.post("/{torrent_id}/priority/up")
+async def priority_up(request: Request, torrent_id: int) -> dict[str, str]:
+    cfg = request.app.state.cfg
+    try:
+        rpc = _get_rpc(cfg)
+        await rpc.queue_move_up(torrent_id)
+        return {"status": "moved_up", "id": str(torrent_id)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to move torrent up: {e}") from e
+
+
+@router.post("/{torrent_id}/priority/down")
+async def priority_down(request: Request, torrent_id: int) -> dict[str, str]:
+    cfg = request.app.state.cfg
+    try:
+        rpc = _get_rpc(cfg)
+        await rpc.queue_move_down(torrent_id)
+        return {"status": "moved_down", "id": str(torrent_id)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to move torrent down: {e}") from e
+
+
 class DownloadReleaseRequest(BaseModel):
     indexer: str
     title: str
@@ -106,6 +128,8 @@ class DownloadReleaseRequest(BaseModel):
     year: int | None = None
     season: int | None = None
     episode: int | None = None
+    imdb_id: str | None = None
+    tmdb_id: int | None = None
 
 
 @router.post("/download/release")
@@ -133,6 +157,8 @@ async def download_release(request: Request, body: DownloadReleaseRequest) -> di
             media_type=body.media_type,
             season=body.season,
             episode=body.episode,
+            imdb_id=body.imdb_id,
+            tmdb_id=body.tmdb_id,
         )
         return {"status": "queued", "result": str(res), "infohash": release.infohash}
     except Exception as e:

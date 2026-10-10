@@ -353,6 +353,12 @@ class RpcClient:
             raise RpcError(f"Torrent {torrent_id} not found")
         return await self._request("queue-move-down", {"ids": [t["id"]]})
 
+    async def queue_move_up(self, torrent_id: int | str) -> dict:
+        return await self.move_queue_up(torrent_id)
+
+    async def queue_move_down(self, torrent_id: int | str) -> dict:
+        return await self.move_queue_down(torrent_id)
+
     async def move_queue_bottom(self, torrent_id: int | str) -> dict:
         t = await self.get(torrent_id)
         if t is None:

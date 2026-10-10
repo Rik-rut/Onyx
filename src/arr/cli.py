@@ -64,16 +64,86 @@ def web_cmd(
     ctx: typer.Context,
     host: str = typer.Option("0.0.0.0", "--host", help="Host interface to bind on"),
     port: int = typer.Option(8080, "--port", help="Port to listen on"),
+    open_browser: bool = typer.Option(
+        True, "--open-browser/--no-open-browser", help="Open browser on start"
+    ),
 ) -> None:
     """Launch the Web UI dashboard."""
+    import sys
+    import threading
+    import time
+    import webbrowser
+
     import uvicorn
 
+    from arr.interactive import run_interactive
     from arr.web.app import create_app
 
     cfg = _config(ctx)
     web_app = create_app(cfg)
-    typer.echo(f"Starting ARR Web UI on http://{host}:{port}")
-    uvicorn.run(web_app, host=host, port=port)
+    disp_host = "localhost" if host in ("0.0.0.0", "127.0.0.1") else host
+    url = f"http://{disp_host}:{port}"
+
+    config = uvicorn.Config(web_app, host=host, port=port, log_level="warning")
+    server = uvicorn.Server(config)
+
+    server_thread = threading.Thread(target=server.run, daemon=True)
+    server_thread.start()
+
+    time.sleep(0.5)
+
+    if open_browser:
+        try:
+            webbrowser.open_new_tab(url)
+        except Exception:
+            pass
+
+    typer.echo("")
+    typer.echo("=" * 60)
+    typer.echo("               ARR Web UI Dashboard Running")
+    typer.echo(f"  URL: {url}")
+    typer.echo("=" * 60)
+    typer.echo("  [C] Launch Interactive CLI Dashboard")
+    typer.echo("  [Q] Exit Web Server (or Ctrl+C)")
+    typer.echo("=" * 60)
+    typer.echo("")
+
+    if not sys.stdin or not sys.stdin.isatty():
+        try:
+            while server_thread.is_alive():
+                time.sleep(1)
+        except KeyboardInterrupt:
+            server.should_exit = True
+        return
+
+    try:
+        while server_thread.is_alive():
+            typer.echo("Command [c/q]: ", nl=False)
+            cmd = input().strip().lower()
+            if cmd == "c":
+                typer.echo("\nLaunching Interactive CLI Dashboard...\n")
+                try:
+                    run_interactive(cfg)
+                except KeyboardInterrupt:
+                    pass
+                typer.echo("")
+                typer.echo("=" * 60)
+                typer.echo("               ARR Web UI Dashboard Running")
+                typer.echo(f"  URL: {url}")
+                typer.echo("=" * 60)
+                typer.echo("  [C] Launch Interactive CLI Dashboard")
+                typer.echo("  [Q] Exit Web Server (or Ctrl+C)")
+                typer.echo("=" * 60)
+                typer.echo("")
+            elif cmd in ("q", "0", "exit"):
+                typer.echo("\nShutting down web server...")
+                server.should_exit = True
+                break
+    except (KeyboardInterrupt, EOFError):
+        typer.echo("\nShutting down web server...")
+        server.should_exit = True
+
+    server_thread.join(timeout=3)
 
 
 @app.callback(invoke_without_command=True)
@@ -89,7 +159,7 @@ def main(
         "transmission_remote": transmission_remote,
     }
     if ctx.invoked_subcommand is None:
-        interactive_cmd(ctx)
+        web_cmd(ctx, open_browser=True)
 
 
 @search_app.command("movie")

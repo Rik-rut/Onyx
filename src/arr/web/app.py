@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from arr.config.settings import Config
@@ -12,6 +12,12 @@ from arr.web.routes.library import router as library_router
 from arr.web.routes.queue import router as queue_router
 from arr.web.routes.search import router as search_router
 from arr.web.routes.ws import router as ws_router
+
+FAVICON_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
+    '<text y=".9em" font-size="90">🎬</text>'
+    "</svg>"
+)
 
 
 def create_app(cfg: Config) -> FastAPI:
@@ -27,6 +33,10 @@ def create_app(cfg: Config) -> FastAPI:
 
     static_dir = Path(__file__).parent / "static"
     index_file = static_dir / "index.html"
+
+    @app.get("/favicon.ico")
+    async def get_favicon() -> Response:
+        return Response(content=FAVICON_SVG, media_type="image/svg+xml")
 
     @app.get("/", response_class=HTMLResponse)
     async def get_index() -> HTMLResponse:

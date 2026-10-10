@@ -332,3 +332,179 @@ def test_ensure_subtitles_tv_falls_back_to_addic7ed(tmp_path, monkeypatch):
     assert srt_file.read_bytes() == b"1\n00:00:01,000 --> 00:00:02,000\nTV sub\n"
     db.close()
 
+
+def test_ensure_subtitles_missing_imdb_resolves_via_title(tmp_path, monkeypatch):
+    from arr.config.settings import Config
+    from arr.db import DB
+    from arr.subtitles.base import SubtitleCandidate
+    from arr.subtitles.service import ensure_subtitles
+
+    media = tmp_path / "Inception.2010.1080p.mkv"
+    media.write_bytes(b"\x00" * 1024)
+    db = DB(tmp_path / "test.db")
+    cfg = Config()
+
+    monkeypatch.setattr("arr.subtitles.service.has_embedded_subtitles", lambda p, lang: False)
+
+    class FakeImdb:
+        def __init__(self, cfg):
+            pass
+
+        def search_movie(self, title):
+            return {"id": "tt1375666", "title": "Inception", "year": 2010}
+
+    monkeypatch.setattr("arr.metadata.imdb.ImdbClient", FakeImdb)
+
+    received_imdb = []
+
+    class FakeYify:
+        def __init__(self, base):
+            pass
+
+        def search(self, **kwargs):
+            received_imdb.append(kwargs.get("imdb_id"))
+            return [
+                SubtitleCandidate(
+                    subtitle_id=10,
+                    file_id=10,
+                    language="en",
+                    release_name="Inception 1080p",
+                    downloads=500,
+                    hearing_impaired=False,
+                    hd=True,
+                    upload_date="",
+                )
+            ]
+
+        def download(self, cand):
+            return b"1\n00:00:01,000 --> 00:00:02,000\nSub\n"
+
+    monkeypatch.setattr("arr.subtitles.service.YifySubtitlesClient", FakeYify)
+
+    res = ensure_subtitles(
+        media, cfg=cfg, db=db, imdb_id=None, release_name="Inception.2010.1080p"
+    )
+    assert len(res) == 1
+    assert res[0]["source"] == "yify"
+    assert res[0]["state"] == "ok"
+    assert received_imdb == ["tt1375666"]
+    db.close()
+
+
+def test_ensure_subtitles_language_priority(tmp_path, monkeypatch):
+    from arr.config.settings import Config
+    from arr.db import DB
+    from arr.subtitles.base import SubtitleCandidate
+    from arr.subtitles.service import ensure_subtitles
+
+    media = tmp_path / "Movie.mkv"
+    media.write_bytes(b"\x00" * 1024)
+    db = DB(tmp_path / "test.db")
+    cfg = Config()
+    cfg.values["subtitle_languages"] = ["en", "es"]
+
+    monkeypatch.setattr("arr.subtitles.service.has_embedded_subtitles", lambda p, lang: False)
+
+    queried_langs = []
+
+    class FakeYify:
+        def __init__(self, base):
+            pass
+
+        def search(self, **kwargs):
+            langs = kwargs.get("languages") or []
+            queried_langs.extend(langs)
+            if "en" in langs:
+                return []
+            if "es" in langs:
+                return [
+                    SubtitleCandidate(
+                        subtitle_id=20,
+                        file_id=20,
+                        language="es",
+                        release_name="Movie 1080p",
+                        downloads=200,
+                        hearing_impaired=False,
+                        hd=True,
+                        upload_date="",
+                    )
+                ]
+            return []
+
+        def download(self, cand):
+            return b"1\n00:00:01,000 --> 00:00:02,000\nSub Espanol\n"
+
+    class EmptySubdl:
+        def __init__(self, base, **kwargs):
+            pass
+
+        def search(self, **kwargs):
+            return []
+
+        def download(self, cand):
+            return b""
+
+    monkeypatch.setattr("arr.subtitles.service.YifySubtitlesClient", FakeYify)
+    monkeypatch.setattr("arr.subtitles.service.SubdlClient", EmptySubdl)
+    monkeypatch.setattr("arr.subtitles.service.SubsceneClient", EmptySubdl)
+
+    res = ensure_subtitles(media, cfg=cfg, db=db, imdb_id="tt9999999", release_name="Movie")
+    assert any(r["language"] == "es" and r["state"] == "ok" for r in res)
+    assert queried_langs == ["en", "es"]
+    es_file = tmp_path / "Movie.es.srt"
+    assert es_file.exists()
+    db.close()
+
+
+def test_ensure_subtitles_provider_exception_cascades(tmp_path, monkeypatch):
+    from arr.config.settings import Config
+    from arr.db import DB
+    from arr.subtitles.base import SubtitleCandidate
+    from arr.subtitles.service import ensure_subtitles
+
+    media = tmp_path / "Movie2.mkv"
+    media.write_bytes(b"\x00" * 1024)
+    db = DB(tmp_path / "test.db")
+    cfg = Config()
+
+    monkeypatch.setattr("arr.subtitles.service.has_embedded_subtitles", lambda p, lang: False)
+
+    class CrashingYify:
+        def __init__(self, base):
+            pass
+
+        def search(self, **kwargs):
+            raise RuntimeError("Cloudflare 403 Forbidden")
+
+    class WorkingSubdl:
+        def __init__(self, base, **kwargs):
+            pass
+
+        def search(self, **kwargs):
+            return [
+                SubtitleCandidate(
+                    subtitle_id=30,
+                    file_id=30,
+                    language="en",
+                    release_name="Movie2",
+                    downloads=50,
+                    hearing_impaired=False,
+                    hd=True,
+                    upload_date="",
+                )
+            ]
+
+        def download(self, cand):
+            return b"1\n00:00:01,000 --> 00:00:02,000\nFallback sub\n"
+
+    monkeypatch.setattr("arr.subtitles.service.YifySubtitlesClient", CrashingYify)
+    monkeypatch.setattr("arr.subtitles.service.SubdlClient", WorkingSubdl)
+
+    res = ensure_subtitles(media, cfg=cfg, db=db, imdb_id="tt1111111", release_name="Movie2")
+    assert any(r["source"] == "subdl" and r["state"] == "ok" for r in res)
+    srt_file = tmp_path / "Movie2.en.srt"
+    assert srt_file.exists()
+    assert b"Fallback sub" in srt_file.read_bytes()
+    db.close()
+
+

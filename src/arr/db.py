@@ -19,6 +19,9 @@ CREATE TABLE IF NOT EXISTS downloads (
     download_dir TEXT,
     content_path TEXT,
     destination_path TEXT,
+    year INTEGER,
+    imdb_id TEXT,
+    episode_title TEXT,
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL
 );
@@ -69,15 +72,31 @@ class DB:
         self._conn.execute("PRAGMA journal_mode=WAL;")
         self._conn.execute("PRAGMA synchronous=NORMAL;")
         self._conn.execute("PRAGMA busy_timeout=15000;")
-        self._conn.executescript(SCHEMA)
+        has_downloads = False
+        try:
+            row = self._conn.execute(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='downloads'"
+            ).fetchone()
+            has_downloads = bool(row and row[0] > 0)
+        except sqlite3.OperationalError:
+            pass
+
+        if not has_downloads:
+            try:
+                self._conn.executescript(SCHEMA)
+            except sqlite3.OperationalError:
+                pass
         self._migrate()
 
     def _migrate(self) -> None:
-        cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(downloads)")}
-        for col, typ in (("year", "INTEGER"), ("imdb_id", "TEXT"), ("episode_title", "TEXT")):
-            if col not in cols:
-                self._conn.execute(f"ALTER TABLE downloads ADD COLUMN {col} {typ}")
-        self._conn.commit()
+        try:
+            cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(downloads)")}
+            for col, typ in (("year", "INTEGER"), ("imdb_id", "TEXT"), ("episode_title", "TEXT")):
+                if col not in cols:
+                    self._conn.execute(f"ALTER TABLE downloads ADD COLUMN {col} {typ}")
+            self._conn.commit()
+        except sqlite3.OperationalError:
+            pass
 
     def close(self) -> None:
         self._conn.close()
