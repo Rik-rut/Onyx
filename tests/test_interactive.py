@@ -641,7 +641,7 @@ def test_interactive_movie_flow_multi_match_selection(test_cfg, mock_console):
             "arr.interactive.movie.search_candidates",
             new_callable=AsyncMock,
             return_value=([rel], [scored], q),
-        ),
+        ) as mock_cand,
         patch("arr.interactive.movie.prompt_text", side_effect=["Batman", "1", "auto", ""]),
         patch("arr.interactive.movie.prompt_confirm", return_value=True),
         patch(
@@ -651,6 +651,14 @@ def test_interactive_movie_flow_multi_match_selection(test_cfg, mock_console):
         ) as mock_enqueue,
     ):
         interactive_movie(test_cfg, mock_console)
+        mock_cand.assert_called_once_with(
+            MediaType.MOVIE,
+            "Batman Begins",
+            test_cfg,
+            year=2005,
+            imdb_id="tt0372784",
+            title="Batman Begins",
+        )
         mock_enqueue.assert_called_once()
         out = mock_console.export_text()
         assert "Batman Begins" in out

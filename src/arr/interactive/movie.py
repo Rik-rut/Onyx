@@ -95,6 +95,9 @@ def interactive_movie(cfg: Config, c: Console | None = None) -> None:
                 MediaType.MOVIE,
                 search_query,
                 cfg,
+                year=year,
+                imdb_id=imdb_id,
+                title=search_query,
             )
         )
     except Exception as e:

@@ -22,3 +22,8 @@ downloads/
 # Graphify
 .graphify/
 *graphify-out/
+
+# Markdown files (ignore all except README)
+*.md
+!README.md
+

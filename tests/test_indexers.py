@@ -54,6 +54,66 @@ def test_yts_search():
     assert out[0].magnet.startswith("magnet:")
 
 
+def test_yts_search_with_imdb_id_and_year_filter(tmp_path):
+    payload = {
+        "data": {
+            "movies": [
+                {
+                    "id": 1,
+                    "title": "Spider-Man",
+                    "year": 2002,
+                    "imdb_code": "tt0145487",
+                    "torrents": [
+                        {
+                            "hash": "HASH2002",
+                            "quality": "1080p",
+                            "type": "bluray",
+                            "size_bytes": 2000000000,
+                            "seeds": 100,
+                            "peers": 10,
+                        }
+                    ],
+                },
+                {
+                    "id": 2,
+                    "title": "Spider-Man: Brand New Day",
+                    "year": 2026,
+                    "imdb_code": "tt9999999",
+                    "torrents": [
+                        {
+                            "hash": "HASH2026",
+                            "quality": "1080p",
+                            "type": "bluray",
+                            "size_bytes": 2000000000,
+                            "seeds": 100,
+                            "peers": 10,
+                        }
+                    ],
+                },
+            ]
+        }
+    }
+    with respx.mock:
+        route = respx.get("https://yts.mx/api/v2/list_movies.json").mock(
+            return_value=httpx.Response(200, json=payload)
+        )
+        out = asyncio.run(
+            YtsAdapter("https://yts.mx", HttpClient(cfg(), cache_dir=tmp_path)).search(
+                Query(
+                    media_type=MediaType.MOVIE,
+                    text="Spider-Man",
+                    year=2002,
+                    imdb_id="tt0145487",
+                )
+            )
+        )
+    assert route.called
+    assert route.calls.last.request.url.params["query_term"] == "tt0145487"
+    assert len(out) == 1
+    assert out[0].year == 2002
+    assert "2002" in out[0].title
+
+
 def test_yts_schema_mismatch():
     with respx.mock:
         respx.get("https://yts.mx/api/v2/list_movies.json").mock(

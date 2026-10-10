@@ -186,6 +186,12 @@ def hard_filter(r: Release, q: Query, profile: QualityProfile, cfg: dict) -> str
             return f"season {r.season} != {q.season}"
         if q.episode is not None and r.episode is not None and r.episode != q.episode:
             return f"episode {r.episode} != {q.episode}"
+    if q.media_type == MediaType.MOVIE and q.imdb_id and r.imdb_id:
+        if q.imdb_id.lower() != r.imdb_id.lower():
+            return f"imdb_id {r.imdb_id} != {q.imdb_id}"
+    if q.media_type == MediaType.MOVIE and q.year is not None and r.year is not None:
+        if abs(r.year - q.year) > 1:
+            return f"year {r.year} != {q.year}"
     return None
 
 

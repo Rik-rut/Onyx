@@ -261,6 +261,10 @@ def interactive_tv(cfg: Config, c: Console | None = None) -> None:
                                     cfg,
                                     season=season_num,
                                     episode=ep_n,
+                                    year=series_info.year if series_info else None,
+                                    tmdb_id=tmdb_id,
+                                    imdb_id=imdb_id,
+                                    title=show_title,
                                 )
                             )
                             if rel_list:
@@ -336,6 +340,10 @@ def interactive_tv(cfg: Config, c: Console | None = None) -> None:
                 cfg,
                 season=season_num,
                 episode=episode_num,
+                year=series_info.year if series_info else None,
+                tmdb_id=tmdb_id,
+                imdb_id=imdb_id,
+                title=show_title,
             )
         )
     except Exception as e:

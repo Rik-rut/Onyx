@@ -127,25 +127,41 @@ async def search_candidates(
     cfg: Config,
     season: int | None = None,
     episode: int | None = None,
+    *,
+    year: int | None = None,
+    imdb_id: str | None = None,
+    tmdb_id: int | None = None,
+    title: str | None = None,
 ) -> tuple[list[Release], list[Scored], Query]:
-    q = Query(media_type=media_type, text=query, season=season, episode=episode)
-    # Metadata resolve (best effort)
+    q = Query(
+        media_type=media_type,
+        text=title or query,
+        season=season,
+        episode=episode,
+        year=year,
+        imdb_id=imdb_id,
+        tmdb_id=tmdb_id,
+        title=title or query,
+    )
+    # Metadata resolve (best effort) only if not already supplied
     try:
         if media_type == MediaType.MOVIE:
-            imdb = ImdbClient(cfg)
-            m = imdb.search_movie(query)
-            if m:
-                q.imdb_id = m.get("imdb_id") or m.get("id")
-                q.title = m.get("title")
-                q.year = m.get("year")
+            if not q.imdb_id and not q.year:
+                imdb = ImdbClient(cfg)
+                m = imdb.search_movie(query)
+                if m:
+                    q.imdb_id = m.get("imdb_id") or m.get("id")
+                    q.title = m.get("title")
+                    q.year = m.get("year")
         else:
-            tvm = TvmazeClient(cfg)
-            s = tvm.search_tv(query)
-            if s:
-                q.tmdb_id = s.get("id")
-                q.title = s.get("name")
-                ext = s.get("externals") or {}
-                q.imdb_id = ext.get("imdb")
+            if not q.tmdb_id and not q.imdb_id:
+                tvm = TvmazeClient(cfg)
+                s = tvm.search_tv(query)
+                if s:
+                    q.tmdb_id = s.get("id")
+                    q.title = s.get("name")
+                    ext = s.get("externals") or {}
+                    q.imdb_id = ext.get("imdb")
     except (TvmazeError, ImdbError) as e:
         if media_type == MediaType.MOVIE:
             degrade_movie(query)
@@ -172,9 +188,22 @@ async def search(
     season: int | None = None,
     episode: int | None = None,
     explain_mode: bool = False,
+    *,
+    year: int | None = None,
+    imdb_id: str | None = None,
+    tmdb_id: int | None = None,
+    title: str | None = None,
 ) -> list[Release]:
     accepted, scored, _ = await search_candidates(
-        media_type, query, cfg, season=season, episode=episode
+        media_type,
+        query,
+        cfg,
+        season=season,
+        episode=episode,
+        year=year,
+        imdb_id=imdb_id,
+        tmdb_id=tmdb_id,
+        title=title,
     )
     if explain_mode:
         print(explain(scored), file=sys.stderr)
