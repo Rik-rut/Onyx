@@ -961,21 +961,34 @@ async def cancel_download(download_id, cfg, delete_data=False):
         db.close()
         print("Not found.", file=sys.stderr)
         raise SystemExit(3)
+    infohash = str(rec["infohash"])
     rpc_error = None
     try:
         rpc = _rpc(cfg)
-        await rpc.remove(download_id, delete_data=delete_data)
+        await rpc.remove(infohash, delete_data=delete_data)
     except DependencyUnavailable as e:
         rpc_error = str(e)
     except RpcError as e:
         # torrent already gone from the daemon; still mark it locally
         rpc_error = str(e)
-    db.set_download_state(download_id, "skipped")
+    if delete_data and rec.get("content_path"):
+        import shutil
+
+        cp = Path(rec["content_path"])
+        if cp.exists():
+            try:
+                if cp.is_dir():
+                    shutil.rmtree(cp)
+                else:
+                    cp.unlink()
+            except OSError:
+                pass
+    db.set_download_state(infohash, "skipped")
     db.close()
     if rpc_error:
         print(f"Torrent removed locally; daemon said: {rpc_error}", file=sys.stderr)
     else:
-        print(f"Cancelled {download_id}.")
+        print(f"Cancelled {infohash}.")
 
 
 async def import_download(download_id, cfg, overwrite=False):

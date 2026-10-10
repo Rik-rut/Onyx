@@ -128,6 +128,7 @@ def render_queue_table(
         show_header=True,
         header_style="bold magenta",
     )
+    table.add_column("#", style="dim", justify="right", width=4)
     table.add_column("Hash", style="dim", width=10)
     table.add_column("Title", style="bold white", no_wrap=False)
     table.add_column("Type", justify="center", style="cyan", width=7)
@@ -137,7 +138,7 @@ def render_queue_table(
     table.add_column("ETA", justify="right", width=10)
 
     by_hash = torrents_by_hash or {}
-    for item in items:
+    for idx, item in enumerate(items):
         h = str(item.get("infohash", ""))
         short_h = h[:8]
         title = item.get("title") or "Unknown"
@@ -179,7 +180,9 @@ def render_queue_table(
             speed_str = "--"
             eta_str = "--"
 
-        table.add_row(short_h, title, media_type, state_str, progress_str, speed_str, eta_str)
+        table.add_row(
+            str(idx), short_h, title, media_type, state_str, progress_str, speed_str, eta_str
+        )
     return table
 
 

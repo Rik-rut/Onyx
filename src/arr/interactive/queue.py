@@ -20,6 +20,22 @@ if TYPE_CHECKING:
     from arr.config.settings import Config
 
 
+def _resolve_download_id(raw: str, items: list[dict]) -> str:
+    cleaned = raw.strip()
+    if not cleaned:
+        return ""
+    if cleaned.isdigit():
+        idx = int(cleaned)
+        if 0 <= idx < len(items):
+            return str(items[idx]["infohash"])
+    lower = cleaned.lower()
+    for item in items:
+        h = str(item.get("infohash", "")).lower()
+        if h.startswith(lower):
+            return str(item["infohash"])
+    return cleaned
+
+
 def interactive_queue(cfg: Config, c: Console | None = None) -> None:
     """Interactive queue management: display status, refresh, cancel, and manual import."""
     target = c or console
@@ -75,30 +91,56 @@ def interactive_queue(cfg: Config, c: Console | None = None) -> None:
 
         elif choice == "2":
             target.print("\n[bold]Cancel Download[/bold]")
-            dl_id = prompt_text("Enter download hash or ID to cancel", allow_back=True, c=target)
+            prompt_label = (
+                f"Enter download index [0-{len(items)-1}] or hash to cancel"
+                if items
+                else "Enter download hash to cancel"
+            )
+            dl_id = prompt_text(prompt_label, allow_back=True, c=target)
             if not dl_id:
                 continue
+            target_id = _resolve_download_id(dl_id, items)
             del_data = prompt_confirm(
                 "Also delete downloaded data from disk?", default=False, c=target
             )
             try:
-                asyncio.run(cancel_download(dl_id, cfg, delete_data=del_data))
-                target.print(f"[bold green]Cancelled download '{dl_id}'.[/bold green]")
+                asyncio.run(cancel_download(target_id, cfg, delete_data=del_data))
+                target.print(f"[bold green]Cancelled download '{target_id[:8]}'.[/bold green]")
+            except SystemExit as e:
+                if e.code == 3:
+                    target.print(f"[bold red]Download '{dl_id}' not found.[/bold red]")
+                else:
+                    target.print(f"[bold red]Cancel failed with exit code {e.code}.[/bold red]")
             except Exception as e:
                 target.print(f"[bold red]Failed to cancel download: {e}[/bold red]")
             prompt_text("Press Enter to continue", allow_back=False, c=target)
 
         elif choice == "3":
             target.print("\n[bold]Manual Import[/bold]")
-            dl_id = prompt_text("Enter download hash or ID to import", allow_back=True, c=target)
+            prompt_label = (
+                f"Enter download index [0-{len(items)-1}] or hash to import"
+                if items
+                else "Enter download hash to import"
+            )
+            dl_id = prompt_text(prompt_label, allow_back=True, c=target)
             if not dl_id:
                 continue
+            target_id = _resolve_download_id(dl_id, items)
             overwrite = prompt_confirm(
                 "Overwrite existing files if already present?", default=False, c=target
             )
             try:
-                asyncio.run(import_download(dl_id, cfg, overwrite=overwrite))
-                target.print(f"[bold green]Import complete for '{dl_id}'.[/bold green]")
+                asyncio.run(import_download(target_id, cfg, overwrite=overwrite))
+                target.print(f"[bold green]Import complete for '{target_id[:8]}'.[/bold green]")
+            except SystemExit as e:
+                if e.code == 3:
+                    target.print(f"[bold red]Download '{dl_id}' not found.[/bold red]")
+                elif e.code == 1:
+                    target.print(
+                        f"[bold red]Nothing importable found for '{target_id[:8]}'.[/bold red]"
+                    )
+                else:
+                    target.print(f"[bold red]Import failed with exit code {e.code}.[/bold red]")
             except Exception as e:
                 target.print(f"[bold red]Import failed: {e}[/bold red]")
             prompt_text("Press Enter to continue", allow_back=False, c=target)

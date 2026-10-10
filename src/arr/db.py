@@ -117,7 +117,15 @@ class DB:
             return False
 
     def get_download(self, infohash: str) -> dict | None:
-        row = self._conn.execute("SELECT * FROM downloads WHERE infohash=?", (infohash,)).fetchone()
+        h = infohash.strip()
+        row = self._conn.execute(
+            "SELECT * FROM downloads WHERE LOWER(infohash)=LOWER(?)", (h,)
+        ).fetchone()
+        if not row and len(h) >= 4:
+            row = self._conn.execute(
+                "SELECT * FROM downloads WHERE LOWER(infohash) LIKE LOWER(?) || '%' LIMIT 1",
+                (h,),
+            ).fetchone()
         return dict(row) if row else None
 
     def set_download_state(self, infohash: str, state: DownloadState | str, **fields) -> None:

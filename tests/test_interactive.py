@@ -360,6 +360,41 @@ def test_interactive_queue_view(test_cfg, mock_console):
         interactive_queue(test_cfg, mock_console)
         mock_cancel.assert_called_once_with("hash01", test_cfg, delete_data=False)
 
+    # Test cancel with index "0"
+    with (
+        patch("arr.interactive.queue.list_queue", return_value=items),
+        patch("arr.transmission.process.RpcClient.list_torrents", return_value=[]),
+        patch("arr.interactive.queue.prompt_text", side_effect=["2", "0", "", "b"]),
+        patch("arr.interactive.queue.prompt_confirm", return_value=False),
+        patch("arr.interactive.queue.cancel_download", new_callable=AsyncMock) as mock_cancel,
+    ):
+        interactive_queue(test_cfg, mock_console)
+        mock_cancel.assert_called_once_with("hash01", test_cfg, delete_data=False)
+
+    # Test cancel with short prefix "hash0"
+    with (
+        patch("arr.interactive.queue.list_queue", return_value=items),
+        patch("arr.transmission.process.RpcClient.list_torrents", return_value=[]),
+        patch("arr.interactive.queue.prompt_text", side_effect=["2", "hash0", "", "b"]),
+        patch("arr.interactive.queue.prompt_confirm", return_value=False),
+        patch("arr.interactive.queue.cancel_download", new_callable=AsyncMock) as mock_cancel,
+    ):
+        interactive_queue(test_cfg, mock_console)
+        mock_cancel.assert_called_once_with("hash01", test_cfg, delete_data=False)
+
+    # Test cancel when not found (SystemExit 3 handled gracefully)
+    with (
+        patch("arr.interactive.queue.list_queue", return_value=items),
+        patch("arr.transmission.process.RpcClient.list_torrents", return_value=[]),
+        patch("arr.interactive.queue.prompt_text", side_effect=["2", "unknown", "", "b"]),
+        patch("arr.interactive.queue.prompt_confirm", return_value=False),
+        patch("arr.interactive.queue.cancel_download", side_effect=SystemExit(3)),
+    ):
+        mock_console._record_buffer.clear()
+        interactive_queue(test_cfg, mock_console)
+        out = mock_console.export_text()
+        assert "not found" in out.lower()
+
     # Test manual import
     with (
         patch("arr.interactive.queue.list_queue", return_value=items),

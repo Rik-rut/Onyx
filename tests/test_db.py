@@ -20,6 +20,28 @@ def test_download_state_transition(tmp_path):
     db.close()
 
 
+def test_download_prefix_and_case_insensitive(tmp_path):
+    db = DB(tmp_path / "arr.db")
+    db.add_download(
+        "b6abea6bac7debb9bcf845983727fa6edfced29d",
+        media_type="movie",
+        title="Spider-Man",
+    )
+    # Exact match
+    assert db.get_download("b6abea6bac7debb9bcf845983727fa6edfced29d") is not None
+    # Case-insensitive
+    assert db.get_download("B6ABEA6BAC7DEBB9BCF845983727FA6EDFCED29D") is not None
+    # Prefix match (8 chars as in table)
+    prefix_match = db.get_download("b6abea6b")
+    assert prefix_match is not None
+    assert prefix_match["title"] == "Spider-Man"
+    # Case-insensitive prefix
+    assert db.get_download("B6ABEA6B") is not None
+    # Non-existent
+    assert db.get_download("nonexistent") is None
+    db.close()
+
+
 def test_episode_dedupe(tmp_path):
     db = DB(tmp_path / "arr.db")
     assert db.episode_state(1, 1, 1) is None
