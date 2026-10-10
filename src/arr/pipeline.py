@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import sys
 import time
 from pathlib import Path
@@ -860,16 +861,42 @@ def _delete_series_files(series: dict, cfg: Config, db: DB) -> int:
     return removed
 
 
-def _resolve_content(rec: dict) -> Path | None:
+def _resolve_content(rec: dict, cfg: Config | None = None) -> Path | None:
     """Path to import from, or None if it can't be determined safely.
 
     Prefers the per-torrent `content_path` recorded from the daemon. Falls back
-    to `download_dir` only when that is *not* a shared staging or library root,
-    since importing the staging root would mix every torrent's files.
+    to Transmission RPC query, title subdirectory, or fuzzy token match in
+    `download_dir` when safe.
     """
     cp = rec.get("content_path")
     if cp:
-        return Path(str(cp))
+        p_cp = Path(str(cp))
+        if p_cp.exists():
+            return p_cp
+
+    # Try resolving via Transmission RPC if available and infohash is present
+    if cfg is not None and rec.get("infohash"):
+        try:
+            rpc = _rpc(cfg)
+            torrents = asyncio.run(rpc.list_torrents())
+            target_t = next(
+                (
+                    t
+                    for t in torrents
+                    if str(t.get("hashString", "")).lower() == str(rec["infohash"]).lower()
+                ),
+                None,
+            )
+            if target_t:
+                t_name = target_t.get("name")
+                t_dir = target_t.get("downloadDir") or rec.get("download_dir")
+                if t_dir and t_name:
+                    cand = Path(str(t_dir)) / t_name
+                    if cand.exists():
+                        return cand
+        except Exception:
+            pass
+
     dd = rec.get("download_dir")
     if not dd:
         return None
@@ -880,13 +907,36 @@ def _resolve_content(rec: dict) -> Path | None:
             candidate = p / title
             if candidate.exists():
                 return candidate
+            if p.exists() and p.is_dir():
+                clean_title = re.sub(r"[^\w\s]", " ", title.lower())
+                tokens = [
+                    tok
+                    for tok in clean_title.split()
+                    if len(tok) > 2
+                    and tok
+                    not in (
+                        "the",
+                        "and",
+                        "1080p",
+                        "720p",
+                        "bluray",
+                        "webrip",
+                        "x264",
+                        "x265",
+                        "hevc",
+                    )
+                ]
+                for entry in p.iterdir():
+                    e_name = entry.name.lower()
+                    if tokens and all(t in e_name for t in tokens[:3]):
+                        return entry
         return None
-    return p
+    return p if p.exists() else None
 
 
 def _import_record(rec: dict, cfg: Config, db: DB, *, overwrite: bool = False) -> Path | None:
     """Import one completed download's content into the library. Idempotent."""
-    content = _resolve_content(rec)
+    content = _resolve_content(rec, cfg=cfg)
     if content is None or not content.exists():
         return None
     media_type = rec.get("media_type")
@@ -1112,7 +1162,7 @@ def _poll_and_import(cfg: Config, db: DB) -> int:
         # moment a torrent is added, so its presence is not a completion signal.
         if rec.get("state") != "completed":
             continue
-        content = _resolve_content(rec)
+        content = _resolve_content(rec, cfg=cfg)
         if content is None or not content.exists():
             continue
         final = _import_record(rec, cfg, db)

@@ -715,3 +715,36 @@ def test_live_monitor_downloads_safe_exit(test_cfg, mock_console):
     out = mock_console.export_text()
     assert "Live Download Monitor" in out
 
+
+def test_check_exit_keypress():
+    import sys
+    from unittest.mock import MagicMock
+
+    from arr.interactive.ui import check_exit_keypress
+
+    # Test Windows path
+    mock_msvcrt_hit = MagicMock(
+        kbhit=MagicMock(return_value=True),
+        getch=MagicMock(return_value=b"q"),
+    )
+    with patch.object(sys, "platform", "win32"):
+        with patch.dict("sys.modules", {"msvcrt": mock_msvcrt_hit}):
+            assert check_exit_keypress() is True
+        with patch.dict("sys.modules", {"msvcrt": MagicMock(kbhit=MagicMock(return_value=False))}):
+            assert check_exit_keypress() is False
+
+    # Test POSIX path
+    with patch.object(sys, "platform", "linux"):
+        with (
+            patch("sys.stdin.isatty", return_value=True),
+            patch("sys.stdin.read", return_value="q"),
+            patch("select.select", return_value=([MagicMock()], [], [])),
+        ):
+            assert check_exit_keypress() is True
+        with (
+            patch("sys.stdin.isatty", return_value=True),
+            patch("select.select", return_value=([], [], [])),
+        ):
+            assert check_exit_keypress() is False
+
+

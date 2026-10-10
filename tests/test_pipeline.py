@@ -512,3 +512,54 @@ def test_enqueue_release_allows_redownloading_skipped(tmp_path, monkeypatch):
     assert rec["state"] in ("added", "downloading", "queued")
     db2.close()
 
+
+def test_resolve_content_direct_and_fuzzy(tmp_path):
+    # 1. Direct content_path
+    f1 = tmp_path / "movie.mp4"
+    f1.write_bytes(b"data")
+    assert pipeline._resolve_content({"content_path": str(f1)}) == f1
+
+    # 2. Fuzzy scan in staging directory
+    movies_dir = tmp_path / "movies"
+    movies_dir.mkdir()
+    actual_folder = movies_dir / "Inception.2010.1080p.BluRay.x264"
+    actual_folder.mkdir()
+    (actual_folder / "Inception.mp4").write_bytes(b"data")
+
+    # Record has different raw title but matching significant tokens
+    rec = {
+        "download_dir": str(movies_dir),
+        "title": "Inception 2010 1080p",
+    }
+    resolved = pipeline._resolve_content(rec)
+    assert resolved == actual_folder
+
+
+def test_resolve_content_rpc_fallback(tmp_path, monkeypatch):
+    cfg = make_cfg(tmp_path)
+    content_dir = tmp_path / "rpc_downloads"
+    content_dir.mkdir()
+    file_path = content_dir / "Actual.Torrent.Name"
+    file_path.mkdir()
+
+    class RpcMock:
+        async def list_torrents(self):
+            return [
+                {
+                    "hashString": "testhash123",
+                    "name": "Actual.Torrent.Name",
+                    "downloadDir": str(content_dir),
+                }
+            ]
+
+    monkeypatch.setattr(pipeline, "_rpc", lambda c: RpcMock())
+
+    rec = {
+        "infohash": "testhash123",
+        "title": "Some Other Title",
+        "download_dir": str(tmp_path / "movies"),
+    }
+    resolved = pipeline._resolve_content(rec, cfg=cfg)
+    assert resolved == file_path
+
+

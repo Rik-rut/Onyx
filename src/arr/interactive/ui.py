@@ -437,6 +437,31 @@ def parse_episode_selection(text: str, max_ep: int | None = None) -> list[int]:
     return sorted(selected)
 
 
+def check_exit_keypress() -> bool:
+    """Non-blocking keypress check for live monitor exit ('q', 'b', Enter, etc.)."""
+    if sys.platform == "win32":
+        try:
+            import msvcrt
+
+            if msvcrt.kbhit():
+                msvcrt.getch()
+                return True
+        except Exception:
+            pass
+    else:
+        try:
+            import select
+
+            if sys.stdin.isatty():
+                r, _, _ = select.select([sys.stdin], [], [], 0)
+                if r:
+                    sys.stdin.read(1)
+                    return True
+        except Exception:
+            pass
+    return False
+
+
 def live_monitor_downloads(
     cfg: Config,
     c: Console | None = None,
@@ -528,15 +553,8 @@ def live_monitor_downloads(
                 if max_iterations is not None and iterations >= max_iterations:
                     break
 
-                if sys.platform == "win32":
-                    try:
-                        import msvcrt
-
-                        if msvcrt.kbhit():
-                            msvcrt.getch()
-                            break
-                    except Exception:
-                        pass
+                if check_exit_keypress():
+                    break
 
                 time.sleep(poll_interval)
     except KeyboardInterrupt:

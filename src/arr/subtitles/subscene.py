@@ -102,7 +102,28 @@ class SubsceneClient:
             raise SubtitleError(f"Subscene download failed: {e}") from e
         if getattr(resp, "status_code", 0) != 200:
             raise SubtitleError(f"Subscene HTTP {getattr(resp, 'status_code', '?')}")
-        return _extract_srt(resp.content)
+        content = resp.content
+        trimmed = content.lstrip()
+        if (
+            trimmed.startswith((b"<!DOCTYPE", b"<!doctype", b"<html", b"<HTML", b"<head", b"<HEAD"))
+            or b"<html" in trimmed[:300].lower()
+        ):
+            # Intermediate details page: follow download button
+            tree = HTMLParser(resp.text)
+            btn = tree.css_first(
+                "a#downloadButton, a[href*='/subtitles/download/'], a[href*='/download']"
+            )
+            if btn and btn.attributes.get("href"):
+                href = btn.attributes.get("href") or ""
+                url = href if href.startswith("http") else f"{self.base}{href}"
+                try:
+                    resp2 = _fetch_with(self._session, url)
+                except Exception as e:
+                    raise SubtitleError(f"Subscene download failed: {e}") from e
+                if getattr(resp2, "status_code", 0) != 200:
+                    raise SubtitleError(f"Subscene HTTP {getattr(resp2, 'status_code', '?')}")
+                content = resp2.content
+        return _extract_srt(content)
 
 
 def _guess_language(text: str) -> str:
@@ -123,15 +144,56 @@ def _guess_language(text: str) -> str:
     return "en"
 
 
+def is_valid_subtitle_payload(data: bytes) -> bool:
+    if not data:
+        return False
+    trimmed = data.lstrip()
+    if (
+        trimmed.startswith((b"<!DOCTYPE", b"<!doctype", b"<html", b"<HTML", b"<head", b"<HEAD"))
+        or b"<html" in trimmed[:300].lower()
+    ):
+        return False
+    if b"-->" in data:
+        return True
+    if trimmed.startswith(b"WEBVTT"):
+        return True
+    if b"[Script Info]" in data or b"Dialogue:" in data:
+        return True
+    if re.match(rb"^\s*1\s*[\r\n]", data):
+        return True
+    if re.match(rb"^\{[0-9]+\}\{[0-9]+\}", trimmed):
+        return True
+    return False
+
+
 def _extract_srt(content: bytes) -> bytes:
+    if not content:
+        raise SubtitleError("Empty subtitle content")
     if content[:2] == b"PK":
-        with zipfile.ZipFile(io.BytesIO(content)) as z:
-            names = [
-                n
-                for n in z.namelist()
-                if n.lower().endswith((".srt", ".ass", ".sub", ".vtt"))
-            ]
-            if not names:
-                raise SubtitleError("No subtitle file in archive")
-            return z.read(names[0])
+        try:
+            with zipfile.ZipFile(io.BytesIO(content)) as z:
+                names = [
+                    n
+                    for n in z.namelist()
+                    if n.lower().endswith((".srt", ".ass", ".sub", ".vtt"))
+                ]
+                if not names:
+                    raise SubtitleError("No subtitle file in archive")
+                extracted = z.read(names[0])
+        except zipfile.BadZipFile as e:
+            raise SubtitleError(f"Corrupt subtitle ZIP archive: {e}") from e
+        if not is_valid_subtitle_payload(extracted):
+            raise SubtitleError("Invalid subtitle payload in archive")
+        return extracted
+
+    trimmed = content.lstrip()
+    if (
+        trimmed.startswith((b"<!DOCTYPE", b"<!doctype", b"<html", b"<HTML", b"<head", b"<HEAD"))
+        or b"<html" in trimmed[:300].lower()
+    ):
+        raise SubtitleError(
+            "Invalid subtitle payload: received HTML instead of subtitle/ZIP archive"
+        )
+    if not is_valid_subtitle_payload(content):
+        raise SubtitleError("Invalid subtitle payload: not a valid subtitle or ZIP archive")
     return content

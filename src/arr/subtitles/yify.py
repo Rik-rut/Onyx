@@ -94,4 +94,27 @@ class YifySubtitlesClient:
             raise SubtitleError(f"YIFY download failed: {e}") from e
         if getattr(resp, "status_code", 0) != 200:
             raise SubtitleError(f"YIFY HTTP {getattr(resp, 'status_code', '?')}")
-        return _extract_srt(resp.content)
+        content = resp.content
+        trimmed = content.lstrip()
+        if (
+            trimmed.startswith((b"<!DOCTYPE", b"<!doctype", b"<html", b"<HTML", b"<head", b"<HEAD"))
+            or b"<html" in trimmed[:300].lower()
+        ):
+            # Intermediate details page: follow download button
+            tree = HTMLParser(resp.text)
+            sel = (
+                "a.download-subtitle, a[href$='.zip'], "
+                "a[href*='/subtitle/'][href$='.zip'], a[href*='download']"
+            )
+            btn = tree.css_first(sel)
+            if btn and btn.attributes.get("href"):
+                href = btn.attributes.get("href") or ""
+                url = href if href.startswith("http") else f"{self.base}{href}"
+                try:
+                    resp2 = _fetch_with(self._session, url)
+                except Exception as e:
+                    raise SubtitleError(f"YIFY download failed: {e}") from e
+                if getattr(resp2, "status_code", 0) != 200:
+                    raise SubtitleError(f"YIFY HTTP {getattr(resp2, 'status_code', '?')}")
+                content = resp2.content
+        return _extract_srt(content)

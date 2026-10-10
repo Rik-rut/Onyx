@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
+import urllib.parse
 
 from arr.core.models import MediaType, Query, Release
-from arr.indexers.base import HttpClient, SchemaMismatchError
+from arr.indexers.base import HttpClient, SchemaMismatchError, tracker_list
 
 
 class YtsAdapter:
@@ -73,12 +74,17 @@ class YtsAdapter:
                         f"{m.get('title', '')} {m.get('year', '')} "
                         f"{t.get('quality', '')} {t.get('type', '')}"
                     ).strip()
+                    h_clean = str(h).lower()
+                    trackers = tracker_list(getattr(self.http, "cfg", None))
+                    dn_param = f"&dn={urllib.parse.quote(title)}" if title else ""
+                    tr_params = "".join(f"&tr={urllib.parse.quote(tr)}" for tr in trackers)
+                    magnet = f"magnet:?xt=urn:btih:{h_clean}{dn_param}{tr_params}"
                     out.append(
                         Release(
                             indexer=self.name,
                             title=title,
-                            infohash=str(h).lower(),
-                            magnet=f"magnet:?xt=urn:btih:{h}",
+                            infohash=h_clean,
+                            magnet=magnet,
                             media_type=MediaType.MOVIE,
                             seeds=int(t.get("seeds", 0) or 0),
                             peers=int(t.get("peers", 0) or 0),

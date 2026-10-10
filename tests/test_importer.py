@@ -113,3 +113,42 @@ def test_episode_import_does_not_cross_assign_subtitles(tmp_path):
     # but crucially ep2's subtitle content is not present
     contents = {p.read_text() for p in f.parent.glob("*.srt")}
     assert "ep2 subs" not in contents
+
+
+def test_single_file_movie_does_not_import_unrelated_subtitles(tmp_path):
+    shared = tmp_path / "downloads" / "movies"
+    shared.mkdir(parents=True)
+    movie_a = shared / "MovieA.2023.1080p.mp4"
+    movie_a.write_bytes(b"\x00" * 1024)
+    movie_b = shared / "MovieB.2021.1080p.mp4"
+    movie_b.write_bytes(b"\x00" * 1024)
+    sub_b = shared / "MovieB.2021.1080p.en.srt"
+    sub_b.write_text("Movie B subtitle text")
+
+    lib = tmp_path / "lib"
+    final_a = import_movie(movie_a, lib, "Movie A", 2023)
+    assert final_a is not None and final_a.exists()
+    # Movie A's destination folder must NOT contain Movie B's subtitle
+    dest_dir = final_a.parent
+    subs_in_dest = list(dest_dir.glob("*.srt"))
+    assert subs_in_dest == []
+
+
+def test_single_file_movie_imports_adjacent_matching_subtitles(tmp_path):
+    shared = tmp_path / "downloads" / "movies"
+    shared.mkdir(parents=True)
+    movie_a = shared / "MovieA.2023.1080p.mp4"
+    movie_a.write_bytes(b"\x00" * 1024)
+    sub_a = shared / "MovieA.2023.1080p.en.srt"
+    sub_a.write_text("Movie A subtitle text")
+    sub_b = shared / "MovieB.2021.1080p.en.srt"
+    sub_b.write_text("Movie B subtitle text")
+
+    lib = tmp_path / "lib"
+    final_a = import_movie(movie_a, lib, "Movie A", 2023)
+    assert final_a is not None and final_a.exists()
+    dest_dir = final_a.parent
+    subs_in_dest = list(dest_dir.glob("*.srt"))
+    assert len(subs_in_dest) == 1
+    assert subs_in_dest[0].read_text() == "Movie A subtitle text"
+

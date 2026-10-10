@@ -65,10 +65,37 @@ def media_files(root: Path) -> list[Path]:
 
 
 def subtitle_files(root: Path) -> list[Path]:
+    if not root.exists():
+        return []
+    if root.is_file():
+        return [root] if root.suffix.lower() in SUB_EXTS else []
     out = []
     for p in sorted(root.rglob("*")):
         if p.is_file() and p.suffix.lower() in SUB_EXTS:
             out.append(p)
+    return out
+
+
+def subtitle_files_adjacent(media_file: Path) -> list[Path]:
+    """Find subtitle files sharing the base name of a single media file in the same directory."""
+    parent = media_file.parent
+    if not parent.exists():
+        return []
+    base = media_file.stem.lower()
+    out = []
+    try:
+        for p in sorted(parent.iterdir()):
+            if p.is_file() and p.suffix.lower() in SUB_EXTS:
+                p_stem = p.stem.lower()
+                if (
+                    p_stem == base
+                    or p_stem.startswith(base + ".")
+                    or p_stem.startswith(base + "_")
+                    or p_stem.startswith(base + "-")
+                ):
+                    out.append(p)
+    except OSError:
+        pass
     return out
 
 
@@ -161,15 +188,15 @@ def rename_subtitle(src: Path, media_dst: Path, lang: str = "en") -> Path:
     return src.with_name(f"{media_dst.stem}.{lang}{src.suffix}")
 
 
-def import_subtitles(
-    root: Path,
+def _import_subtitle_paths(
+    subs: list[Path],
     media_dst: Path,
     *,
     lang: str = "en",
     only: Callable[[Path], bool] | None = None,
 ) -> list[Path]:
     out = []
-    for s in subtitle_files(root):
+    for s in subs:
         if only is not None and not only(s):
             continue
         name = s.name.lower()
@@ -195,6 +222,20 @@ def import_subtitles(
     return out
 
 
+def import_subtitles(
+    root: Path,
+    media_dst: Path,
+    *,
+    lang: str = "en",
+    only: Callable[[Path], bool] | None = None,
+) -> list[Path]:
+    if root.is_file():
+        subs = subtitle_files_adjacent(root)
+    else:
+        subs = subtitle_files(root)
+    return _import_subtitle_paths(subs, media_dst, lang=lang, only=only)
+
+
 def import_movie(
     content: Path,
     library_root: Path,
@@ -210,7 +251,10 @@ def import_movie(
     primary = max(files, key=lambda p: p.stat().st_size)
     dst = movie_dest(library_root, title, year, primary.suffix.lower())
     final = import_file(primary, dst, mode=mode, overwrite=overwrite)
-    import_subtitles(content if content.is_dir() else content.parent, final)
+    if content.is_dir():
+        import_subtitles(content, final)
+    else:
+        _import_subtitle_paths(subtitle_files_adjacent(content), final)
     return final
 
 
@@ -238,10 +282,15 @@ def import_episode(
         primary.suffix.lower(),
     )
     final = import_file(primary, dst, mode=mode, overwrite=overwrite)
-    sub_root = content if content.is_dir() else content.parent
-    import_subtitles(
-        sub_root, final, only=_episode_sub_filter(sub_root, season, episode)
-    )
+    if content.is_dir():
+        import_subtitles(
+            content, final, only=_episode_sub_filter(content, season, episode)
+        )
+    else:
+        subs = subtitle_files_adjacent(content)
+        _import_subtitle_paths(
+            subs, final, only=_episode_sub_filter(content.parent, season, episode)
+        )
     return final
 
 

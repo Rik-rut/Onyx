@@ -95,5 +95,18 @@ class HttpClient:
         raise IndexerError(f"GET {url} failed after retries: {last_exc}")
 
 
+DEFAULT_PUBLIC_TRACKERS: list[str] = [
+    "udp://tracker.opentrackr.org:1337/announce",
+    "udp://open.stealth.si:80/announce",
+    "udp://tracker.openbittorrent.com:80/announce",
+    "udp://opentracker.i2p.rocks:6969/announce",
+    "udp://tracker.torrent.eu.org:451/announce",
+]
+
+
 def tracker_list(cfg) -> list[str]:
-    return []
+    if cfg is not None and hasattr(cfg, "get"):
+        configured = cfg.get("trackers")
+        if configured and isinstance(configured, list):
+            return [str(t) for t in configured if t]
+    return list(DEFAULT_PUBLIC_TRACKERS)

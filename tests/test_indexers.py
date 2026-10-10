@@ -51,7 +51,21 @@ def test_yts_search():
     assert len(out) == 1
     assert out[0].infohash == "abc123"
     assert out[0].seeds == 100
-    assert out[0].magnet.startswith("magnet:")
+    assert out[0].magnet.startswith("magnet:?xt=urn:btih:abc123")
+    assert "&dn=Inception" in out[0].magnet
+    assert "&tr=udp" in out[0].magnet
+
+
+def test_tracker_list_custom_and_default():
+    from arr.indexers.base import DEFAULT_PUBLIC_TRACKERS, tracker_list
+
+    # Default
+    assert tracker_list({}) == DEFAULT_PUBLIC_TRACKERS
+    assert tracker_list(None) == DEFAULT_PUBLIC_TRACKERS
+
+    # Custom
+    custom_cfg = {"trackers": ["udp://custom.tracker:6969/announce"]}
+    assert tracker_list(custom_cfg) == ["udp://custom.tracker:6969/announce"]
 
 
 def test_yts_search_with_imdb_id_and_year_filter(tmp_path):

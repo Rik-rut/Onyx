@@ -70,3 +70,51 @@ def test_subtitles_table(tmp_path):
     rows = db.list_subtitles("/m/x.mkv")
     assert rows[0]["source"] == "missing"
     db.close()
+
+
+def test_sqlite_wal_mode_and_pragmas(tmp_path):
+    db_file = tmp_path / "wal_test.db"
+    db = DB(db_file)
+    cur = db._conn.cursor()
+    journal = cur.execute("PRAGMA journal_mode;").fetchone()[0]
+    synchronous = cur.execute("PRAGMA synchronous;").fetchone()[0]
+    busy_timeout = cur.execute("PRAGMA busy_timeout;").fetchone()[0]
+    assert journal.lower() == "wal"
+    assert synchronous in (1, "NORMAL", "normal")  # 1 corresponds to NORMAL
+    assert busy_timeout == 15000
+    db.close()
+
+
+def test_sqlite_concurrent_read_write(tmp_path):
+    import threading
+
+    db_file = tmp_path / "concurrency.db"
+    errors = []
+
+    def writer_task():
+        try:
+            db_w = DB(db_file)
+            for i in range(50):
+                db_w.add_download(f"hash_{i}", media_type="movie", title=f"Movie {i}")
+            db_w.close()
+        except Exception as e:
+            errors.append(e)
+
+    def reader_task():
+        try:
+            db_r = DB(db_file)
+            for _ in range(50):
+                _ = db_r.list_downloads()
+            db_r.close()
+        except Exception as e:
+            errors.append(e)
+
+    t1 = threading.Thread(target=writer_task)
+    t2 = threading.Thread(target=reader_task)
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
+
+    assert errors == []
+
