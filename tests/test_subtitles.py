@@ -133,8 +133,11 @@ def test_subscene_download_follows_intermediate_page():
 
 
 def test_yify_download_follows_intermediate_page():
+    received_headers: list[tuple[str, dict | None]] = []
+
     class FakeSession:
-        def get(self, url, timeout=20):
+        def get(self, url, timeout=20, headers=None, **kwargs):
+            received_headers.append((url, headers))
             if url == "https://yifysubtitles.ch/subtitle/inception-777":
                 class Resp:
                     status_code = 200
@@ -162,6 +165,10 @@ def test_yify_download_follows_intermediate_page():
     )
     data = client.download(cand)
     assert b"Inception sub" in data
+    zip_headers = [h for u, h in received_headers if u.endswith(".zip")]
+    assert len(zip_headers) == 1
+    assert zip_headers[0] is not None
+    assert zip_headers[0].get("Referer") == "https://yifysubtitles.ch/subtitle/inception-777"
 
 
 def test_addic7ed_search_and_download():
@@ -319,6 +326,14 @@ def test_ensure_subtitles_tv_falls_back_to_addic7ed(tmp_path, monkeypatch):
         def download(self, cand):
             return b"1\n00:00:01,000 --> 00:00:02,000\nTV sub\n"
 
+    class EmptyOpenSubtitles:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def search(self, **kwargs):
+            return []
+
+    monkeypatch.setattr("arr.subtitles.service.OpenSubtitlesClient", EmptyOpenSubtitles)
     monkeypatch.setattr("arr.subtitles.service.Addic7edClient", lambda base: FakeAddic7ed())
 
     res = ensure_subtitles(
@@ -379,6 +394,14 @@ def test_ensure_subtitles_missing_imdb_resolves_via_title(tmp_path, monkeypatch)
         def download(self, cand):
             return b"1\n00:00:01,000 --> 00:00:02,000\nSub\n"
 
+    class EmptyOpenSubtitles:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def search(self, **kwargs):
+            return []
+
+    monkeypatch.setattr("arr.subtitles.service.OpenSubtitlesClient", EmptyOpenSubtitles)
     monkeypatch.setattr("arr.subtitles.service.YifySubtitlesClient", FakeYify)
 
     res = ensure_subtitles(
@@ -444,6 +467,7 @@ def test_ensure_subtitles_language_priority(tmp_path, monkeypatch):
         def download(self, cand):
             return b""
 
+    monkeypatch.setattr("arr.subtitles.service.OpenSubtitlesClient", EmptySubdl)
     monkeypatch.setattr("arr.subtitles.service.YifySubtitlesClient", FakeYify)
     monkeypatch.setattr("arr.subtitles.service.SubdlClient", EmptySubdl)
     monkeypatch.setattr("arr.subtitles.service.SubsceneClient", EmptySubdl)
@@ -497,6 +521,7 @@ def test_ensure_subtitles_provider_exception_cascades(tmp_path, monkeypatch):
         def download(self, cand):
             return b"1\n00:00:01,000 --> 00:00:02,000\nFallback sub\n"
 
+    monkeypatch.setattr("arr.subtitles.service.OpenSubtitlesClient", CrashingYify)
     monkeypatch.setattr("arr.subtitles.service.YifySubtitlesClient", CrashingYify)
     monkeypatch.setattr("arr.subtitles.service.SubdlClient", WorkingSubdl)
 
@@ -506,5 +531,182 @@ def test_ensure_subtitles_provider_exception_cascades(tmp_path, monkeypatch):
     assert srt_file.exists()
     assert b"Fallback sub" in srt_file.read_bytes()
     db.close()
+
+
+def test_opensubtitles_language_mapping():
+    from arr.subtitles.opensubtitles import (
+        normalize_to_2letter_lang,
+        normalize_to_3letter_lang,
+    )
+
+    assert normalize_to_3letter_lang("en") == "eng"
+    assert normalize_to_3letter_lang("es") == "spa"
+    assert normalize_to_3letter_lang("fra") == "fra"
+    assert normalize_to_2letter_lang("eng") == "en"
+    assert normalize_to_2letter_lang("spa") == "es"
+
+
+def test_opensubtitles_search_movie_and_download():
+    import gzip
+
+    from arr.subtitles.opensubtitles import OpenSubtitlesClient
+
+    captured_url = []
+    captured_headers = []
+
+    class FakeSession:
+        def get(self, url, timeout=20, headers=None, **kwargs):
+            captured_url.append(url)
+            captured_headers.append(headers)
+            if "search" in url:
+                class RespSearch:
+                    status_code = 200
+
+                    def json(self):
+                        return [
+                            {
+                                "IDSubtitleFile": "1957482",
+                                "SubFileName": "Inception.2010.1080p.BluRay.x264.srt",
+                                "MovieReleaseName": "Inception 2010 1080p",
+                                "SubDownloadLink": "https://dl.opensubtitles.org/file/1957482.gz",
+                                "SubDownloadsCnt": "4500",
+                                "SubHearingImpaired": "1",
+                                "SubHD": "1",
+                                "SubAddDate": "2011-01-01",
+                                "SubLanguageID": "eng",
+                                "ISO639": "en",
+                            }
+                        ]
+
+                return RespSearch()
+
+            if "file/1957482.gz" in url:
+                raw_srt = b"1\n00:00:01,000 --> 00:00:04,000\nDream within a dream\n"
+                gz_data = gzip.compress(raw_srt)
+
+                class RespDl:
+                    status_code = 200
+                    content = gz_data
+
+                return RespDl()
+
+            raise ValueError(f"Unexpected url {url}")
+
+    client = OpenSubtitlesClient(session=FakeSession())
+    cands = client.search(imdb_id="tt1375666", languages=["en"])
+    assert len(cands) == 1
+    assert "imdbid-1375666" in captured_url[0]
+    assert "sublanguageid-eng" in captured_url[0]
+    assert captured_headers[0]["User-Agent"] == "VLSub 0.10.2"
+
+    c = cands[0]
+    assert c.subtitle_id == 1957482
+    assert c.hearing_impaired is True
+    assert c.language == "en"
+    assert c.downloads == 4500
+
+    data = client.download(c)
+    assert b"Dream within a dream" in data
+
+
+def test_opensubtitles_search_tv_episode():
+    from arr.subtitles.opensubtitles import OpenSubtitlesClient
+
+    captured_url = []
+
+    class FakeSession:
+        def get(self, url, timeout=20, headers=None, **kwargs):
+            captured_url.append(url)
+
+            class Resp:
+                status_code = 200
+
+                def json(self):
+                    return [
+                        {
+                            "IDSubtitleFile": 998877,
+                            "SubFileName": "Breaking.Bad.S01E01.Pilot.srt",
+                            "SubDownloadLink": "https://dl.opensubtitles.org/file/998877.gz",
+                            "SubDownloadsCnt": 1200,
+                            "SubHearingImpaired": 0,
+                            "SubLanguageID": "eng",
+                        }
+                    ]
+
+            return Resp()
+
+    client = OpenSubtitlesClient(session=FakeSession())
+    cands = client.search(
+        imdb_id="tt0903747",
+        season=1,
+        episode=1,
+        languages=["en"],
+    )
+    assert len(cands) == 1
+    assert "episode-1" in captured_url[0]
+    assert "season-1" in captured_url[0]
+    assert "imdbid-0903747" in captured_url[0]
+    assert cands[0].subtitle_id == 998877
+
+
+def test_ensure_subtitles_prefers_opensubtitles(tmp_path, monkeypatch):
+    import gzip
+
+    from arr.config.settings import Config
+    from arr.db import DB
+    from arr.subtitles.service import ensure_subtitles
+
+    media = tmp_path / "Inception.mkv"
+    media.write_bytes(b"\x00" * 1024)
+    db = DB(tmp_path / "test.db")
+    cfg = Config()
+
+    monkeypatch.setattr("arr.subtitles.service.has_embedded_subtitles", lambda p, lang: False)
+
+    raw_srt = b"1\n00:00:01,000 --> 00:00:04,000\nOpenSubtitles hit\n"
+    gz_data = gzip.compress(raw_srt)
+
+    class FakeOpenSubtitlesSession:
+        def get(self, url, timeout=20, headers=None, **kwargs):
+            if "search" in url:
+                class RespSearch:
+                    status_code = 200
+
+                    def json(self):
+                        return [
+                            {
+                                "IDSubtitleFile": 12345,
+                                "SubFileName": "Inception.srt",
+                                "SubDownloadLink": "https://dl.opensubtitles.org/file/12345.gz",
+                                "SubDownloadsCnt": 100,
+                                "SubHearingImpaired": 0,
+                                "SubLanguageID": "eng",
+                            }
+                        ]
+
+                return RespSearch()
+
+            class RespDl:
+                status_code = 200
+                content = gz_data
+
+            return RespDl()
+
+    from arr.subtitles.opensubtitles import OpenSubtitlesClient
+
+    monkeypatch.setattr(
+        "arr.subtitles.service.OpenSubtitlesClient",
+        lambda base: OpenSubtitlesClient(session=FakeOpenSubtitlesSession()),
+    )
+
+    res = ensure_subtitles(media, cfg=cfg, db=db, imdb_id="tt1375666", release_name="Inception")
+    assert len(res) == 1
+    assert res[0]["source"] == "opensubtitles"
+    assert res[0]["state"] == "ok"
+    srt_file = tmp_path / "Inception.en.srt"
+    assert srt_file.exists()
+    assert b"OpenSubtitles hit" in srt_file.read_bytes()
+    db.close()
+
 
 

@@ -155,7 +155,7 @@ def test_api_download_release(client: TestClient) -> None:
         "size_bytes": 1000,
     }
     with patch(
-        "arr.web.routes.queue.enqueue_release", new_callable=AsyncMock, return_value="added"
+        "arr.web.routes.queue.enqueue_release", new_callable=AsyncMock, return_value=(True, "added")
     ) as mock_enq:
         resp = client.post("/api/queue/download/release", json=body)
         assert resp.status_code == 200
@@ -312,7 +312,7 @@ def test_download_release_propagates_metadata(client: TestClient) -> None:
 
 def test_download_release_with_imdb_id_in_tmdb_field(client: TestClient) -> None:
     with patch(
-        "arr.web.routes.queue.enqueue_release", new_callable=AsyncMock, return_value="added"
+        "arr.web.routes.queue.enqueue_release", new_callable=AsyncMock, return_value=(True, "added")
     ) as mock_enq:
         payload = {
             "indexer": "yts",
@@ -356,4 +356,118 @@ def test_index_page_phase6_elements(client: TestClient) -> None:
     assert "priorityDown" in resp.text
     assert "filteredReleases" in resp.text
     assert "subtitleLanguagesInput" in resp.text
+
+
+def test_download_release_propagates_enqueue_failure(client: TestClient) -> None:
+    with patch(
+        "arr.web.routes.queue.enqueue_release",
+        new_callable=AsyncMock,
+        return_value=(False, "Transmission unavailable: connection refused on port 9091"),
+    ):
+        payload = {
+            "indexer": "yts",
+            "title": "Movie.Fail.1080p",
+            "infohash": "hash_fail",
+            "magnet": "magnet:?xt=urn:btih:hash_fail",
+            "media_type": "movie",
+        }
+        resp = client.post("/api/queue/download/release", json=payload)
+        assert resp.status_code == 500
+        assert "Transmission unavailable" in resp.json()["detail"]
+
+
+def test_get_queue_merges_sqlite_and_transmission(client: TestClient, test_cfg: Config) -> None:
+    from arr.pipeline import _db
+
+    db = _db(test_cfg)
+    try:
+        db.add_download(
+            "hash_sqlite_only",
+            media_type="movie",
+            title="Inception SQLite",
+            state="queued",
+        )
+        db.add_download(
+            "hash_both",
+            media_type="tv",
+            title="Show Both",
+            state="downloading",
+        )
+    finally:
+        db.close()
+
+    mock_torrents = [
+        {
+            "id": 42,
+            "hashString": "hash_both",
+            "name": "Show Live Transmission",
+            "percentDone": 0.45,
+            "status": 4,
+            "rateDownload": 2500000,
+            "rateUpload": 50000,
+            "eta": 120,
+            "totalSize": 1000000000,
+        }
+    ]
+
+    with patch(
+        "arr.transmission.process.RpcClient.list_torrents", new_callable=AsyncMock
+    ) as m_list:
+        m_list.return_value = mock_torrents
+        resp = client.get("/api/queue")
+        assert resp.status_code == 200
+        items = resp.json()
+        assert len(items) == 2
+
+        by_hash = {it["infohash"]: it for it in items}
+        assert "hash_sqlite_only" in by_hash
+        assert by_hash["hash_sqlite_only"]["status"] == "Queued"
+        assert by_hash["hash_sqlite_only"]["progress"] == 0.0
+
+        assert "hash_both" in by_hash
+        assert by_hash["hash_both"]["id"] == 42
+        assert by_hash["hash_both"]["name"] == "Show Live Transmission"
+        assert by_hash["hash_both"]["progress"] == 45.0
+        assert by_hash["hash_both"]["rate_download"] == 2500000
+
+
+def test_queue_actions_accept_infohash_string(client: TestClient) -> None:
+    hash_str = "abcdef1234567890abcdef1234567890abcdef12"
+    with (
+        patch("arr.transmission.process.RpcClient.stop", new_callable=AsyncMock) as m_stop,
+        patch("arr.transmission.process.RpcClient.start", new_callable=AsyncMock) as m_start,
+        patch("arr.transmission.process.RpcClient.remove", new_callable=AsyncMock) as m_remove,
+        patch(
+            "arr.transmission.process.RpcClient.queue_move_up", new_callable=AsyncMock
+        ) as m_up,
+        patch(
+            "arr.transmission.process.RpcClient.queue_move_down", new_callable=AsyncMock
+        ) as m_down,
+    ):
+
+        # Pause with hash string
+        resp = client.post(f"/api/queue/{hash_str}/pause")
+        assert resp.status_code == 200
+        m_stop.assert_called_with(hash_str)
+
+        # Resume with hash string
+        resp = client.post(f"/api/queue/{hash_str}/resume")
+        assert resp.status_code == 200
+        m_start.assert_called_with(hash_str)
+
+        # Priority up with hash string
+        resp = client.post(f"/api/queue/{hash_str}/priority/up")
+        assert resp.status_code == 200
+        m_up.assert_called_with(hash_str)
+
+        # Priority down with hash string
+        resp = client.post(f"/api/queue/{hash_str}/priority/down")
+        assert resp.status_code == 200
+        m_down.assert_called_with(hash_str)
+
+        # Delete with hash string
+        resp = client.post(f"/api/queue/{hash_str}/delete")
+        assert resp.status_code == 200
+        m_remove.assert_called_with(hash_str, delete_data=False)
+
 

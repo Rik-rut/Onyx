@@ -58,10 +58,12 @@ class YifySubtitlesClient:
             text = (li.text() or "").strip()
             if not text:
                 continue
-            d = li.css_first("a[href*='/subtitle/'], a[href*='download']")
+            d = li.css_first("a[href*='/subtitles/'], a[href*='/subtitle/'], a[href$='.zip']")
             if not d:
                 continue
             href = d.attributes.get("href") or ""
+            if not href or "/user/" in href or href == "#":
+                continue
             link = href if href.startswith("http") else f"{self.base}{href}"
             if link in seen_links:
                 continue
@@ -89,7 +91,11 @@ class YifySubtitlesClient:
         if not candidate.download_link:
             raise SubtitleError("No download link")
         try:
-            resp = _fetch_with(self._session, candidate.download_link)
+            resp = _fetch_with(
+                self._session,
+                candidate.download_link,
+                headers={"Referer": self.base},
+            )
         except Exception as e:
             raise SubtitleError(f"YIFY download failed: {e}") from e
         if getattr(resp, "status_code", 0) != 200:
@@ -104,14 +110,24 @@ class YifySubtitlesClient:
             tree = HTMLParser(resp.text)
             sel = (
                 "a.download-subtitle, a[href$='.zip'], "
+                "a[href*='/subtitles/'][href$='.zip'], "
                 "a[href*='/subtitle/'][href$='.zip'], a[href*='download']"
             )
-            btn = tree.css_first(sel)
+            btn = None
+            for b in tree.css(sel):
+                b_href = b.attributes.get("href") or ""
+                if "/user/" not in b_href and b_href != "#":
+                    btn = b
+                    break
             if btn and btn.attributes.get("href"):
                 href = btn.attributes.get("href") or ""
                 url = href if href.startswith("http") else f"{self.base}{href}"
                 try:
-                    resp2 = _fetch_with(self._session, url)
+                    resp2 = _fetch_with(
+                        self._session,
+                        url,
+                        headers={"Referer": candidate.download_link},
+                    )
                 except Exception as e:
                     raise SubtitleError(f"YIFY download failed: {e}") from e
                 if getattr(resp2, "status_code", 0) != 200:

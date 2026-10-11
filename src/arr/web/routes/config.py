@@ -7,7 +7,9 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from arr.config.settings import save_config
+from arr.log import get_logger
 
+logger = get_logger("config")
 router = APIRouter(prefix="/api/config", tags=["config"])
 
 
@@ -54,6 +56,8 @@ async def update_config(request: Request, body: UpdateConfigRequest) -> dict[str
 
     try:
         await asyncio.to_thread(save_config, cfg)
+        logger.info(f"Updated configuration keys: {list(updates.keys())}")
         return {"status": "saved", "config": cfg.redacted()}
     except Exception as e:
+        logger.error(f"Failed to save configuration: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to save config: {e}") from e

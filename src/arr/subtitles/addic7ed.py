@@ -31,6 +31,14 @@ class Addic7edClient:
             return []
 
         clean_title = re.sub(r"\s*\(\d{4}\)", "", title).strip()
+        try:
+            from guessit import guessit
+
+            g = guessit(title)
+            if g.get("title"):
+                clean_title = str(g["title"])
+        except Exception:
+            pass
         wanted_langs = set(languages or ["en"])
 
         search_url = (

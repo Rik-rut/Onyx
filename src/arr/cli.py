@@ -77,14 +77,32 @@ def web_cmd(
     import uvicorn
 
     from arr.interactive import run_interactive
+    from arr.transmission.process import ensure_daemon, port_in_use
     from arr.web.app import create_app
 
     cfg = _config(ctx)
+    t_port = int(cfg.get("transmission_rpc_port", 9091))
+    was_running = port_in_use(t_port, timeout=0.1)
+    daemon_proc = None
+    if not was_running:
+        try:
+            daemon_proc = ensure_daemon(cfg)
+            log.info("Auto-started Transmission daemon on port %d", t_port)
+        except Exception as e:
+            log.warning("Could not auto-start transmission-daemon: %s", e)
+
     web_app = create_app(cfg)
     disp_host = "localhost" if host in ("0.0.0.0", "127.0.0.1") else host
     url = f"http://{disp_host}:{port}"
 
-    config = uvicorn.Config(web_app, host=host, port=port, log_level="warning")
+    config = uvicorn.Config(
+        web_app,
+        host=host,
+        port=port,
+        log_level="info",
+        access_log=False,
+        log_config=None,
+    )
     server = uvicorn.Server(config)
 
     server_thread = threading.Thread(target=server.run, daemon=True)
@@ -114,14 +132,48 @@ def web_cmd(
                 time.sleep(1)
         except KeyboardInterrupt:
             server.should_exit = True
+        server_thread.join(timeout=3)
+        if daemon_proc is not None:
+            try:
+                daemon_proc.stop()
+            except Exception:
+                pass
         return
+
+    def _read_key() -> str | None:
+        if sys.platform == "win32":
+            try:
+                import msvcrt
+
+                if msvcrt.kbhit():
+                    ch = msvcrt.getch()
+                    if ch in (b"\x00", b"\xe0"):
+                        if msvcrt.kbhit():
+                            msvcrt.getch()
+                        return None
+                    try:
+                        return ch.decode("utf-8", errors="ignore").lower()
+                    except Exception:
+                        return None
+            except Exception:
+                pass
+        else:
+            try:
+                import select
+
+                if sys.stdin and sys.stdin.isatty():
+                    r, _, _ = select.select([sys.stdin], [], [], 0)
+                    if r:
+                        return sys.stdin.read(1).lower()
+            except Exception:
+                pass
+        return None
 
     try:
         while server_thread.is_alive():
-            typer.echo("Command [c/q]: ", nl=False)
-            cmd = input().strip().lower()
-            if cmd == "c":
-                typer.echo("\nLaunching Interactive CLI Dashboard...\n")
+            key = _read_key()
+            if key == "c":
+                typer.echo("\n[CLI] Launching Interactive CLI Dashboard...\n")
                 try:
                     run_interactive(cfg)
                 except KeyboardInterrupt:
@@ -135,15 +187,22 @@ def web_cmd(
                 typer.echo("  [Q] Exit Web Server (or Ctrl+C)")
                 typer.echo("=" * 60)
                 typer.echo("")
-            elif cmd in ("q", "0", "exit"):
+            elif key in ("q", "\x03"):
                 typer.echo("\nShutting down web server...")
                 server.should_exit = True
                 break
+            time.sleep(0.1)
     except (KeyboardInterrupt, EOFError):
         typer.echo("\nShutting down web server...")
         server.should_exit = True
 
     server_thread.join(timeout=3)
+    if daemon_proc is not None:
+        try:
+            daemon_proc.stop()
+            typer.echo("Stopped background Transmission daemon.")
+        except Exception:
+            pass
 
 
 @app.callback(invoke_without_command=True)

@@ -8,8 +8,10 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from arr.interactive.library_view import get_library_movies, get_library_shows
+from arr.log import get_logger
 from arr.pipeline import _db
 
+logger = get_logger("library")
 router = APIRouter(prefix="/api", tags=["library"])
 
 
@@ -20,6 +22,7 @@ async def get_library(request: Request) -> dict[str, Any]:
     movies_dir = lib_root / "movies"
     tv_dir = lib_root / "tv-shows"
 
+    logger.info(f"Scanning media library root: {lib_root}")
     try:
         raw_movies = await asyncio.to_thread(get_library_movies, movies_dir)
         raw_shows = await asyncio.to_thread(get_library_shows, tv_dir, cfg)
@@ -101,6 +104,9 @@ async def monitor_series(request: Request, body: MonitorSeriesRequest) -> dict[s
             status=body.status,
             quality=body.quality,
         )
+        logger.info(
+            f"Added series to monitor list: '{body.title}' (id={series_id}, tmdb={body.tmdb_id})"
+        )
         return {"status": "monitored", "id": series_id, "title": body.title}
     finally:
         db.close()
@@ -112,6 +118,7 @@ async def unmonitor_series(request: Request, series_id: int) -> dict[str, str]:
     db = _db(cfg)
     try:
         db.remove_monitored(series_id)
+        logger.info(f"Removed series ID {series_id} from monitor list")
         return {"status": "unmonitored", "id": str(series_id)}
     finally:
         db.close()

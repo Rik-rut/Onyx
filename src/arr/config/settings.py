@@ -32,6 +32,7 @@ DEFAULTS: dict = {
     "subscene_base_url": "https://subscene.com",
     "yify_subtitles_base_url": "https://yifysubtitles.ch",
     "addic7ed_base_url": "https://www.addic7ed.com",
+    "opensubtitles_base_url": "https://rest.opensubtitles.org",
     "subdl_base_url": "https://api.subdl.com",
     "subdl_api_key": "",
     "quality_profile": "default",
@@ -116,6 +117,7 @@ subtitles_enabled = true
 subtitles_forced_only = false
 # Subtitle providers
 addic7ed_base_url = "https://www.addic7ed.com"
+opensubtitles_base_url = "https://rest.opensubtitles.org"
 subdl_base_url = "https://api.subdl.com"
 subdl_api_key = ""
 

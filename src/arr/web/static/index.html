@@ -207,7 +207,7 @@
           </div>
 
           <div v-if="torrents.length" class="divide-y divide-slate-800">
-            <div v-for="t in torrents" :key="t.id" class="p-3 sm:p-4 hover:bg-slate-800/40 transition">
+            <div v-for="t in torrents" :key="t.id || t.infohash" class="p-3 sm:p-4 hover:bg-slate-800/40 transition">
               <div class="flex flex-col md:flex-row md:items-center justify-between gap-2">
                 <div class="flex-1 min-w-0">
                   <h4 class="font-semibold text-xs sm:text-sm text-slate-100 truncate">{{ t.name }}</h4>
@@ -578,7 +578,7 @@
   </div>
 
   <script>
-    const { createApp, ref, computed, onMounted } = Vue;
+    const { createApp, ref, computed, onMounted, watch } = Vue;
 
     createApp({
       setup() {
@@ -646,6 +646,7 @@
           if (code === 4) return 'bg-blue-500/20 text-blue-400';
           if (code === 6) return 'bg-emerald-500/20 text-emerald-400';
           if (code === 0) return 'bg-slate-700 text-slate-300';
+          if (code === -1) return 'bg-rose-500/20 text-rose-400';
           return 'bg-amber-500/20 text-amber-400';
         }
 
@@ -1031,8 +1032,33 @@
           socket.onerror = () => { socket.close(); };
         }
 
+        async function fetchQueue() {
+          try {
+            const res = await fetch('/api/queue');
+            if (res.ok) {
+              const data = await res.json();
+              if (Array.isArray(data)) {
+                torrents.value = data;
+              }
+            }
+          } catch (e) {}
+        }
+
+        watch(activeTab, (newTab) => {
+          if (newTab === 'queue') {
+            fetchQueue();
+          } else if (newTab === 'monitored') {
+            loadMonitoredSeries();
+          } else if (newTab === 'library') {
+            loadLibrary();
+          } else if (newTab === 'settings') {
+            loadSettings();
+          }
+        });
+
         onMounted(() => {
           initWebSocket();
+          fetchQueue();
         });
 
         return {
@@ -1044,7 +1070,7 @@
           desktopTabClass, mobileTabClass, statusBadgeClass, scoreClass, formatBytes, formatSpeed, formatEta,
           performSearch, closeModal, openReleaseModal, loadTvDetails, selectSeason, searchSeasonPack, searchEpisode,
           fetchReleases, downloadRelease, ingestMagnet, priorityUp, priorityDown,
-          pauseTorrent, resumeTorrent, deleteTorrent, triggerManualImport,
+          pauseTorrent, resumeTorrent, deleteTorrent, triggerManualImport, fetchQueue,
           monitorThisShow, loadMonitoredSeries, unmonitorSeries, loadLibrary, rescanLibrary,
           loadSettings, saveSettings
         };

@@ -169,6 +169,16 @@ def is_valid_subtitle_payload(data: bytes) -> bool:
     return False
 
 
+def _normalize_to_utf8(data: bytes) -> bytes:
+    """Normalize subtitle text bytes to UTF-8 without BOM."""
+    for enc in ("utf-8-sig", "utf-8", "cp1252", "iso-8859-1"):
+        try:
+            return data.decode(enc).encode("utf-8")
+        except UnicodeDecodeError:
+            continue
+    return data.decode("latin-1", errors="replace").encode("utf-8")
+
+
 def _extract_srt(content: bytes) -> bytes:
     if not content:
         raise SubtitleError("Empty subtitle content")
@@ -187,7 +197,7 @@ def _extract_srt(content: bytes) -> bytes:
             raise SubtitleError(f"Corrupt subtitle ZIP archive: {e}") from e
         if not is_valid_subtitle_payload(extracted):
             raise SubtitleError("Invalid subtitle payload in archive")
-        return extracted
+        return _normalize_to_utf8(extracted)
 
     trimmed = content.lstrip()
     if (
@@ -199,4 +209,4 @@ def _extract_srt(content: bytes) -> bytes:
         )
     if not is_valid_subtitle_payload(content):
         raise SubtitleError("Invalid subtitle payload: not a valid subtitle or ZIP archive")
-    return content
+    return _normalize_to_utf8(content)

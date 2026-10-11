@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import sys
+from typing import Any
 
 from arr.config.settings import SECRET_KEYS, Config
 
@@ -25,21 +26,41 @@ class _RedactFilter(logging.Filter):
         return True
 
 
-def configure_logging(config: Config | None = None, level: int = logging.INFO) -> None:
+def configure_logging(
+    config: Config | None = None,
+    level: int = logging.INFO,
+    stream: Any = None,
+) -> None:
     global _configured
-    handler = logging.StreamHandler(sys.stderr)
-    handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
-    root = logging.getLogger("arr")
-    root.handlers.clear()
-    root.addHandler(handler)
-    root.setLevel(level)
+    handler = logging.StreamHandler(stream or sys.stdout)
+    formatter = logging.Formatter(
+        "[%(asctime)s] [%(levelname)-5s] [%(name)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    handler.setFormatter(formatter)
+
     secrets: list[str] = []
     if config is not None:
         for k in SECRET_KEYS:
             v = config.get(k)
             if isinstance(v, str) and v:
                 secrets.append(v)
-    root.addFilter(_RedactFilter(secrets))
+    redact_filter = _RedactFilter(secrets)
+    handler.addFilter(redact_filter)
+
+    root = logging.getLogger("arr")
+    root.handlers.clear()
+    root.addHandler(handler)
+    root.setLevel(level)
+    root.addFilter(redact_filter)
+
+    # Format uvicorn loggers so HTTP requests and server status are visible
+    for uvi_name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+        uvi = logging.getLogger(uvi_name)
+        uvi.setLevel(level)
+        if not uvi.handlers:
+            uvi.addHandler(handler)
+
     _configured = True
 
 

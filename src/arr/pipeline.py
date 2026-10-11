@@ -18,6 +18,7 @@ from arr.importer.layout import (
     media_files,
 )
 from arr.indexers import build_adapters
+from arr.log import get_logger
 from arr.metadata.imdb import ImdbClient, ImdbError
 from arr.metadata.imdb import degrade as degrade_movie
 from arr.metadata.tvmaze import TvmazeClient, TvmazeError
@@ -40,10 +41,14 @@ from arr.transmission.process import (
     plan_slots,
 )
 
+logger = get_logger("pipeline")
+
 DB_PATH = Path(".cache") / "arr" / "arr.db"
 
 
 def _db(cfg: Config) -> DB:
+    if cfg.get("db_path"):
+        return DB(Path(str(cfg.get("db_path"))))
     root = Path(str(cfg.get("library_root", "downloads"))).parent
     path = root / ".cache" / "arr" / "arr.db"
     return DB(path)
@@ -697,6 +702,7 @@ async def enqueue_release(
     episode: int | None = None,
     tmdb_id: int | None = None,
     imdb_id: str | None = None,
+    year: int | None = None,
     force: bool = False,
 ) -> tuple[bool, str]:
     """Enqueue a single release into Transmission and the local database.
@@ -741,6 +747,7 @@ async def enqueue_release(
             return False, f"Failed to add magnet: {e}"
 
         new_state = "queued" if paused else "added"
+        resolved_year = year if year is not None else chosen.year
         if existing:
             db.set_download_state(
                 chosen.infohash,
@@ -749,7 +756,7 @@ async def enqueue_release(
                 tmdb_id=tmdb_id or chosen.tmdb_id,
                 imdb_id=imdb_id or chosen.imdb_id,
                 title=chosen.title,
-                year=chosen.year,
+                year=resolved_year,
                 season=season if season is not None else chosen.season,
                 episode=episode if episode is not None else chosen.episode,
                 indexer=chosen.indexer,
@@ -764,7 +771,7 @@ async def enqueue_release(
                 tmdb_id=tmdb_id or chosen.tmdb_id,
                 imdb_id=imdb_id or chosen.imdb_id,
                 title=chosen.title,
-                year=chosen.year,
+                year=resolved_year,
                 season=season if season is not None else chosen.season,
                 episode=episode if episode is not None else chosen.episode,
                 indexer=chosen.indexer,
@@ -791,6 +798,10 @@ async def enqueue_release(
             except Exception:
                 pass
         msg = "Queued (download limit reached)" if paused else "Started downloading"
+        logger.info(
+            f"Enqueued {media_type}: '{chosen.title}' "
+            f"[{chosen.infohash[:8]}...] -> {new_state} ({msg})"
+        )
         return True, msg
     finally:
         db.close()
@@ -981,6 +992,44 @@ def _resolve_content(rec: dict, cfg: Config | None = None) -> Path | None:
     return p if p.exists() else None
 
 
+def _mirror_subtitles_to_content(content: Path, final_path: Path) -> None:
+    """Mirror any subtitles generated next to final_path into the content directory."""
+    if not final_path.exists():
+        return
+    final_dir = final_path.parent
+    sub_files = list(final_dir.glob(f"{final_path.stem}.*.srt")) + list(
+        final_dir.glob(f"{final_path.stem}.srt")
+    )
+    if not sub_files:
+        return
+
+    # Find the primary video file in content
+    if content.is_file():
+        target_video = content
+    elif content.is_dir():
+        files = media_files(content)
+        if not files:
+            return
+        target_video = max(files, key=lambda p: p.stat().st_size)
+    else:
+        return
+
+    target_dir = target_video.parent
+    target_base = target_video.stem
+
+    for sub in sub_files:
+        suffix_parts = sub.name[len(final_path.stem):]
+        if not suffix_parts.startswith("."):
+            suffix_parts = f".{suffix_parts}"
+        dest_sub = target_dir / f"{target_base}{suffix_parts}"
+        if dest_sub != sub and not dest_sub.exists():
+            try:
+                shutil.copy2(str(sub), str(dest_sub))
+                logger.info(f"Mirrored subtitle to torrent content directory: {dest_sub.name}")
+            except Exception as e:
+                logger.debug(f"Could not mirror subtitle to {dest_sub}: {e}")
+
+
 def _import_record(rec: dict, cfg: Config, db: DB, *, overwrite: bool = False) -> Path | None:
     """Import one completed download's content into the library. Idempotent."""
     content = _resolve_content(rec, cfg=cfg)
@@ -991,6 +1040,7 @@ def _import_record(rec: dict, cfg: Config, db: DB, *, overwrite: bool = False) -
     library = _library_root(cfg)
 
     if media_type == "movie":
+        logger.info(f"Importing movie: '{rec.get('title')}' from {content}")
         final = import_movie(
             content,
             library,
@@ -1000,6 +1050,7 @@ def _import_record(rec: dict, cfg: Config, db: DB, *, overwrite: bool = False) -
             overwrite=overwrite,
         )
         if final:
+            logger.info(f"Successfully imported movie: '{rec.get('title')}' -> {final}")
             db.set_download_state(rec["infohash"], "imported", destination_path=str(final))
             ensure_subtitles(
                 final,
@@ -1009,6 +1060,7 @@ def _import_record(rec: dict, cfg: Config, db: DB, *, overwrite: bool = False) -
                 tmdb_id=rec.get("tmdb_id"),
                 release_name=rec.get("title") or "",
             )
+            _mirror_subtitles_to_content(content, final)
         return final
 
     # TV: single episode or season pack
@@ -1032,11 +1084,19 @@ def _import_record(rec: dict, cfg: Config, db: DB, *, overwrite: bool = False) -
             primary = max(files, key=lambda p: p.stat().st_size) if files else None
         if primary is None:
             return None
+        logger.info(
+            f"Importing TV episode: '{series.title}' "
+            f"S{int(season):02d}E{int(episode):02d} from {primary}"
+        )
         final = import_episode(
             primary, library, series, int(season), int(episode),
             rec.get("episode_title") or "", mode=mode, overwrite=overwrite,
         )
         if final:
+            logger.info(
+                f"Successfully imported TV episode: '{series.title}' "
+                f"S{int(season):02d}E{int(episode):02d} -> {final}"
+            )
             db.set_episode_state(
                 series.tmdb_id, int(season), int(episode), "imported", path=str(final)
             )
@@ -1044,6 +1104,7 @@ def _import_record(rec: dict, cfg: Config, db: DB, *, overwrite: bool = False) -
                 final, cfg=cfg, db=db, imdb_id=series.imdb_id, tmdb_id=series.tmdb_id,
                 season=int(season), episode=int(episode), release_name=rec.get("title") or "",
             )
+            _mirror_subtitles_to_content(primary, final)
             db.set_download_state(rec["infohash"], "imported", destination_path=str(final))
         return final
 
@@ -1085,6 +1146,7 @@ def _import_season_pack(
                 final, cfg=cfg, db=db, imdb_id=series.imdb_id, tmdb_id=series.tmdb_id,
                 season=season, episode=int(ep), release_name=rec.get("title") or "",
             )
+            _mirror_subtitles_to_content(f, final)
     if imported:
         mark_pack_imported(db, series, season)
         db.set_download_state(rec["infohash"], "imported", destination_path=str(last))
@@ -1331,6 +1393,7 @@ async def download_magnet(
     db.close()
 
     print(f"Enqueued {media_type.value}: {final_name} [{final_hash[:8]}]")
+    logger.info(f"Ingested magnet for {media_type.value}: '{final_name}' [{final_hash[:8]}...]")
     return final_hash
 
 
@@ -1377,7 +1440,7 @@ def _poll_and_import(cfg: Config, db: DB) -> int:
     return count
 
 
-def _sync_rpc_state(cfg: Config, db: DB) -> None:
+def _sync_rpc_state(cfg: Config, db: DB | None = None) -> None:
     """Mark downloads completed when the daemon reports them finished (best effort)."""
     try:
         rpc = _rpc(cfg)
@@ -1390,25 +1453,39 @@ def _sync_rpc_state(cfg: Config, db: DB) -> None:
         except Exception:
             return
         by_hash = {str(t.get("hashString", "")).lower(): t for t in torrents}
-        for rec in db.list_downloads():
-            if rec.get("state") in ("imported", "skipped", "failed"):
-                continue
-            t = by_hash.get(str(rec["infohash"]).lower())
-            if not t:
-                continue
-            if is_complete_torrent(t):
-                content = _torrent_content_path(t)
-                if content:
-                    db.set_download_state(rec["infohash"], "completed", content_path=str(content))
-                else:
-                    db.set_download_state(rec["infohash"], "completed")
-            elif rec.get("state") in ("added", "queued") and is_active_torrent(t):
-                db.set_download_state(rec["infohash"], "downloading")
+        local_db = _db(cfg)
+        try:
+            for rec in local_db.list_downloads():
+                if rec.get("state") in ("imported", "skipped", "failed"):
+                    continue
+                t = by_hash.get(str(rec["infohash"]).lower())
+                if not t:
+                    continue
+                if is_complete_torrent(t):
+                    content = _torrent_content_path(t)
+                    if content:
+                        local_db.set_download_state(
+                            rec["infohash"], "completed", content_path=str(content)
+                        )
+                    else:
+                        local_db.set_download_state(rec["infohash"], "completed")
+                elif rec.get("state") in ("added", "queued") and is_active_torrent(t):
+                    local_db.set_download_state(rec["infohash"], "downloading")
+        finally:
+            local_db.close()
 
     try:
-        asyncio.run(_inner())
+        loop = asyncio.get_running_loop()
     except RuntimeError:
-        return
+        loop = None
+
+    if loop and loop.is_running():
+        loop.create_task(_inner())
+    else:
+        try:
+            asyncio.run(_inner())
+        except RuntimeError:
+            pass
 
 
 def run_daemon(cfg):
@@ -1440,7 +1517,7 @@ def run_daemon(cfg):
         time.sleep(int(cfg.get("monitor_poll_interval_minutes", 30)) * 60)
 
 
-def _apply_seeding_policy(cfg: Config, db: DB) -> None:
+def _apply_seeding_policy(cfg: Config, db: DB | None = None) -> None:
     """Evaluate seeding policy for completed downloads (best effort)."""
     from arr.core.models import SeedingPolicyMode
     from arr.seeding import evaluate_torrent, validate_seeding
@@ -1464,27 +1541,40 @@ def _apply_seeding_policy(cfg: Config, db: DB) -> None:
         except Exception:
             return
         by_hash = {str(t.get("hashString", "")).lower(): t for t in torrents}
-        for rec in db.list_downloads():
-            if rec.get("state") != "imported":
-                continue
-            t = by_hash.get(str(rec["infohash"]).lower())
-            if not t:
-                continue
-            if evaluate_torrent(
-                t,
-                mode,
-                seed_ratio=float(cfg.get("seed_ratio", 1.0)),
-                seed_time_hours=float(cfg.get("seed_time_hours", 24.0)),
-                imported=True,
-                import_mode=_import_mode(cfg),
-            ):
-                try:
-                    await rpc.remove(rec["infohash"], delete_data=_import_mode(cfg) != "hardlink")
-                except Exception:
+        local_db = _db(cfg)
+        try:
+            for rec in local_db.list_downloads():
+                if rec.get("state") != "imported":
                     continue
+                t = by_hash.get(str(rec["infohash"]).lower())
+                if not t:
+                    continue
+                if evaluate_torrent(
+                    t,
+                    mode,
+                    seed_ratio=float(cfg.get("seed_ratio", 1.0)),
+                    seed_time_hours=float(cfg.get("seed_time_hours", 24.0)),
+                    imported=True,
+                    import_mode=_import_mode(cfg),
+                ):
+                    try:
+                        delete_data = _import_mode(cfg) != "hardlink"
+                        await rpc.remove(rec["infohash"], delete_data=delete_data)
+                    except Exception:
+                        continue
+        finally:
+            local_db.close()
 
     try:
-        asyncio.run(_inner())
+        loop = asyncio.get_running_loop()
     except RuntimeError:
-        return
+        loop = None
+
+    if loop and loop.is_running():
+        loop.create_task(_inner())
+    else:
+        try:
+            asyncio.run(_inner())
+        except RuntimeError:
+            pass
 
