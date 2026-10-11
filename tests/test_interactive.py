@@ -843,6 +843,43 @@ def test_interactive_library_browser(test_cfg, mock_console, tmp_path):
         interactive_library(test_cfg, mock_console)
 
 
+def test_library_hides_raw_torrent_duplicates(test_cfg, tmp_path):
+    from arr.interactive.library_view import get_library_movies
+    from arr.pipeline import _db
+
+    test_cfg.values["db_path"] = str(tmp_path / "arr.db")
+    movies_dir = tmp_path / "downloads" / "movies"
+
+    clean = movies_dir / "Inception (2010)"
+    clean.mkdir(parents=True)
+    (clean / "Inception (2010).mkv").write_bytes(b"\x00" * 1024)
+
+    raw = movies_dir / "Inception.2010.1080p.BluRay.x264-YTS.AG"
+    raw.mkdir(parents=True)
+    (raw / "Inception.2010.1080p.BluRay.x264-YTS.AG.mkv").write_bytes(b"\x00" * 1024)
+
+    orphan = movies_dir / "Orphan Movie (2019)"
+    orphan.mkdir(parents=True)
+    (orphan / "Orphan Movie (2019).mkv").write_bytes(b"\x00" * 1024)
+
+    db = _db(test_cfg)
+    db.add_download("a" * 40, media_type="movie", title="Inception")
+    db.set_download_state(
+        "a" * 40,
+        "imported",
+        content_path=str(raw),
+        destination_path=str(clean / "Inception (2010).mkv"),
+    )
+    db.add_download("b" * 40, media_type="movie", title="Orphan Movie")
+    db.set_download_state("b" * 40, "skipped", content_path=str(orphan))
+    db.close()
+
+    titles = [m["title"] for m in get_library_movies(movies_dir, test_cfg)]
+    assert "Inception (2010)" in titles
+    assert raw.name not in titles  # raw duplicate hidden
+    assert "Orphan Movie (2019)" in titles  # no imported copy -> kept
+
+
 def test_movie_filter_and_sort(test_cfg, mock_console):
     from arr.core.models import MediaType, Release
     from arr.interactive.movie import interactive_movie

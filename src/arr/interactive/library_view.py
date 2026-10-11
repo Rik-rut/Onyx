@@ -42,13 +42,80 @@ def reveal_in_file_manager(path: Path) -> bool:
         return False
 
 
-def get_library_movies(movies_dir: Path) -> list[dict]:
+def _excluded_content_paths(cfg: Config | None) -> list[Path]:
+    """Resolve raw torrent content paths recorded in the downloads DB.
+
+    With hardlink imports the original torrent payload remains on disk (so
+    seeding can continue) but shares the same data as the clean library copy.
+    Hiding these from the library view avoids showing the same title twice.
+    """
+    if cfg is None:
+        return []
+    try:
+        from arr.pipeline import _db
+
+        db = _db(cfg)
+    except Exception:
+        return []
+    out: list[Path] = []
+    try:
+        for rec in db.list_downloads():
+            cp = rec.get("content_path")
+            dp = rec.get("destination_path")
+            # Only hide a raw folder when a separate imported copy exists.
+            # Skipped/in-place downloads (no distinct destination) keep their
+            # only visible copy.
+            if not cp or not dp:
+                continue
+            try:
+                cp_path = Path(str(cp)).resolve()
+                dp_path = Path(str(dp)).resolve()
+            except OSError:
+                cp_path = Path(str(cp))
+                dp_path = Path(str(dp))
+            if cp_path == dp_path or cp_path in dp_path.parents:
+                continue
+            out.append(cp_path)
+    except Exception:
+        pass
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
+    return out
+
+
+def _is_raw_download(entry: Path, excluded: list[Path]) -> bool:
+    """True when a library entry is a raw torrent payload folder/file."""
+    if entry.name == ".incomplete":
+        return True
+    if not excluded:
+        return False
+    try:
+        resolved = entry.resolve()
+    except OSError:
+        resolved = entry
+    for cp in excluded:
+        if resolved == cp:
+            return True
+        if cp in resolved.parents:
+            return True
+        if entry.is_dir() and cp.parent == resolved:
+            return True
+    return False
+
+
+def get_library_movies(movies_dir: Path, cfg: Config | None = None) -> list[dict]:
     """Scan movies directory and return summary dicts."""
     movies: list[dict] = []
     if not movies_dir.exists():
         return movies
 
+    excluded = _excluded_content_paths(cfg)
     for entry in sorted(movies_dir.iterdir()):
+        if _is_raw_download(entry, excluded):
+            continue
         if entry.is_dir():
             files = [p for p in entry.rglob("*") if p.is_file() and p.suffix.lower() in MEDIA_EXTS]
             if files:
@@ -87,8 +154,11 @@ def get_library_shows(tv_dir: Path, cfg: Config) -> list[dict]:
     except Exception:
         db = None
 
+    excluded = _excluded_content_paths(cfg)
     for entry in sorted(tv_dir.iterdir()):
         if not entry.is_dir():
+            continue
+        if _is_raw_download(entry, excluded):
             continue
 
         files = media_files(entry)
@@ -140,7 +210,7 @@ def interactive_library(cfg: Config, c: Console | None = None) -> None:
     while True:
         print_header("Media Library Browser", f"Storage root: {lib_root}", target)
 
-        movies = get_library_movies(movies_dir)
+        movies = get_library_movies(movies_dir, cfg)
         shows = get_library_shows(tv_dir, cfg)
 
         target.print("[bold]Library Overview:[/bold]")
