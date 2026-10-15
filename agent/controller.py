@@ -748,6 +748,20 @@ class StuckDetector:
         return is_stuck, self.consecutive_stuck
 
 
+def format_model_with_variant(model: str, variant: Optional[str] = None) -> str:
+    """Fold an OpenCode model variant into a single ``-m`` value.
+
+    OpenCode V2 selects a variant through the model string
+    (``provider/model#variant``) and has no ``--variant`` flag, so the variant
+    must never be passed as a separate argument.
+    """
+    model = str(model).strip()
+    variant = "" if variant is None else str(variant).strip()
+    if not variant or "#" in model:
+        return model
+    return f"{model}#{variant}"
+
+
 class OpenCodeRunner:
     """Manages execution of OpenCode CLI commands."""
 
@@ -788,6 +802,42 @@ class OpenCodeRunner:
             return False, f"OpenCode returned exit code {r.returncode}: {r.stderr.strip()}"
         except Exception as e:
             return False, f"Failed to execute OpenCode: {e}"
+
+    # Argument/selection errors the OpenCode CLI reports before it ever starts an
+    # agent. These strings cannot originate from an agent's own output, so they
+    # safely separate "the CLI rejected our invocation" from "the agent ran but
+    # made no progress".
+    CLI_ERROR_MARKERS = (
+        "unrecognized flag",
+        "unknown flag",
+        "unknown command",
+        "unknown argument",
+        "invalid option",
+        "model unavailable",
+        "variant unavailable",
+    )
+
+    @classmethod
+    def detect_cli_error(
+        cls, exit_code: int, stdout: str, stderr: str
+    ) -> Optional[str]:
+        """Return the CLI's own error message when it rejected the invocation.
+
+        Returns ``None`` for a successful run, or for a non-zero exit that looks
+        like agent output rather than a CLI usage/selection failure.
+        """
+        if exit_code == 0:
+            return None
+        combined = f"{stdout or ''}\n{stderr or ''}"
+        lowered = combined.lower()
+        for marker in cls.CLI_ERROR_MARKERS:
+            index = lowered.find(marker)
+            if index == -1:
+                continue
+            line = combined[index:].splitlines()[0].strip()
+            if line:
+                return line
+        return None
 
     def ensure_server(self) -> Optional[str]:
         """Ensure persistent server is running if configured. Return server URL or None."""
@@ -864,19 +914,24 @@ class OpenCodeRunner:
         The worker uses ``opencode_model``/``opencode_variant`` while the
         orchestrator passes its own ``orchestrator_model``/``orchestrator_variant`` —
         the same CLI, just a different model. No separate API call is required.
+
+        OpenCode V2 compatibility:
+        - a variant is part of the model string (``provider/model#variant``);
+          V2 rejects a separate ``--variant`` flag outright.
+        - attaching to a running server uses ``--server``; V2 rejects ``--attach``.
         """
         assert self.executable is not None, "OpenCode executable is missing"
         cmd = [self.executable, "run"]
         if server_url:
-            cmd.extend(["--attach", server_url])
+            cmd.extend(["--server", server_url])
         elif not is_first:
             cmd.append("-c")
         effective_model = model if model is not None else self.config.opencode_model
         effective_variant = variant if variant is not None else self.config.opencode_variant
         if effective_model:
-            cmd.extend(["-m", effective_model])
-        if effective_variant:
-            cmd.extend(["--variant", effective_variant])
+            cmd.extend(
+                ["-m", format_model_with_variant(str(effective_model), effective_variant)]
+            )
         if self.config.auto_approve:
             cmd.append("--auto")
         cmd.append(prompt)
@@ -1424,6 +1479,46 @@ STATE.MD AFTER:
                 print(f"[INFO] OpenCode iteration finished in {duration:.1f}s (Exit code: {opencode_code})")
                 if stdout:
                     print(f"[OUTPUT] {stdout.strip()[:300]}...")
+
+                # Fail fast when the CLI rejected the invocation. Without this a
+                # broken flag or model looks identical to an agent that stalled,
+                # and gets misreported as "loop appears stuck".
+                cli_error_detector = getattr(self.runner, "detect_cli_error", None)
+                cli_error = (
+                    cli_error_detector(opencode_code, stdout, stderr)
+                    if callable(cli_error_detector)
+                    else None
+                )
+                if cli_error:
+                    problem = f"OpenCode CLI rejected the invocation: {cli_error}"
+                    print(f"[ERROR] {problem}", file=sys.stderr)
+                    self.state_file.update(
+                        status="BLOCKED",
+                        iteration=iteration,
+                        problem=problem,
+                        next_action=(
+                            "Fix the OpenCode invocation (model/variant/flags) via "
+                            "OPENCODE_MODEL, OPENCODE_VARIANT or agent/controller.py, "
+                            "then resume."
+                        ),
+                    )
+                    self.write_iteration_log(
+                        iteration=iteration,
+                        timestamp=iter_timestamp,
+                        status_before=status_before,
+                        git_before=git_before,
+                        cmd_list=cmd_list,
+                        opencode_code=opencode_code,
+                        duration=duration,
+                        stdout=stdout,
+                        stderr=stderr,
+                        test_cmd=None,
+                        test_code=-1,
+                        test_output="Skipped: the OpenCode CLI rejected the invocation.",
+                        git_after=self.git.status_short(),
+                        state_after=self.state_file.read_text(),
+                    )
+                    return 1
 
                 # Run Automated Verification
                 test_cmd = self.test_detector.detect_command()
