@@ -15,6 +15,7 @@ logs/*.log
 # Runtime DB / HTTP caches
 .cache/
 downloads/
+agent/
 
 # Environment variables
 .env
