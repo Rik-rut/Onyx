@@ -1142,13 +1142,14 @@
         function deleteTorrent(id, name) {
           requestConfirm({
             title: 'Remove this download?',
-            message: 'This removes the torrent from Transmission. Files already on disk are kept. This cannot be undone.',
-            confirmLabel: 'Remove',
+            message: 'This removes the torrent from Transmission and deletes its downloaded files from downloads/ (both the raw release data and the imported library copy). This cannot be undone.',
+            confirmLabel: 'Remove & delete files',
             destructive: true,
             onConfirm: async () => {
               try {
-                await apiFetch(`/api/queue/${id}/delete`, { method: 'POST' });
-                showToast('Download removed' + (name ? ': ' + name : ''), 'info');
+                const res = await apiFetch(`/api/queue/${id}/delete`, { method: 'POST' });
+                const removed = res && res.files_removed ? ` (${res.files_removed} file path(s) deleted)` : '';
+                showToast('Download removed' + (name ? ': ' + name : '') + removed, 'info');
               } catch (e) {
                 showToast('Could not remove download: ' + e.message, 'error');
               }

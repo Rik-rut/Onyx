@@ -10,6 +10,24 @@ from arr.importer.layout import (
 )
 
 
+def test_subtitle_language_only_accepts_known_codes():
+    """A title word must never be mistaken for a subtitle language tag."""
+    from arr.importer.layout import subtitle_language
+
+    assert (
+        subtitle_language(
+            Path("Kung.Fu.Panda.4.2024.1080p.WEBRip.x265.10bit.AAC5.1-[YTS.MX].srt")
+        )
+        == "en"
+    )
+    assert subtitle_language(Path("Movie.en.srt")) == "en"
+    assert subtitle_language(Path("Movie.English.srt")) == "en"
+    assert subtitle_language(Path("Show.S01E01.eng.srt")) == "en"
+    assert subtitle_language(Path("Show.S01E01.spa.srt")) == "es"
+    assert subtitle_language(Path("Show - S01E01 - Pilot.fre.srt")) == "fr"
+    assert subtitle_language(Path("Random Subtitle.srt")) == "en"
+
+
 def test_movie_dest():
     p = movie_dest(Path("downloads"), "Inception", 2010, ".mkv")
     assert p == Path("downloads/movies/Inception (2010)/Inception (2010).mkv")

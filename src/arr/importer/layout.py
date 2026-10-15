@@ -399,6 +399,14 @@ _LANG_ALIASES = {
     "jap": "ja", "jp": "ja", "japanese": "ja", "kor": "ko", "korean": "ko",
     "chi": "zh", "chs": "zh", "cht": "zh", "rus": "ru",
 }
+# Only these may be read as a subtitle language — a title word like "Fu" in
+# "Kung Fu Panda" must not become a ".fu.srt" tag.
+_LANG_CODES = {
+    "en", "es", "fr", "de", "it", "pt", "ja", "ko", "zh", "ru", "ar", "nl",
+    "pl", "tr", "sv", "no", "da", "fi", "cs", "el", "he", "hi", "th", "vi",
+    "id", "uk", "ro", "hu", "bg", "hr", "sr", "sk", "sl", "fa", "ta", "te",
+    "ml", "bn",
+}
 
 
 def is_clean_folder_name(name: str) -> bool:
@@ -438,14 +446,18 @@ def parse_raw_release_name(name: str) -> tuple[str, int | None]:
 
 
 def subtitle_language(path: Path, default: str = "en") -> str:
-    """Language code for a subtitle file name (`Show.en.srt` -> ``en``)."""
+    """Language code for a subtitle file name (`Show.en.srt` -> ``en``).
+
+    Only known ISO 639-1 codes and their aliases count, so release-title words
+    (``Kung.Fu.Panda...``) are never mistaken for a language.
+    """
     tokens = (
         path.stem.lower().replace(".", " ").replace("_", " ").replace("-", " ").split()
     )
     for token in reversed(tokens):
         if token in _LANG_ALIASES:
             return _LANG_ALIASES[token]
-        if len(token) == 2 and token.isalpha():
+        if token in _LANG_CODES:
             return token
     return default
 
