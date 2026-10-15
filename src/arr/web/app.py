@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from arr.config.settings import Config
 from arr.log import get_logger
 from arr.web.routes.config import router as config_router
+from arr.web.routes.discover import router as discover_router
 from arr.web.routes.library import router as library_router
 from arr.web.routes.queue import router as queue_router
 from arr.web.routes.search import router as search_router
@@ -115,6 +116,7 @@ def create_app(cfg: Config) -> FastAPI:
         return response
 
     app.include_router(search_router)
+    app.include_router(discover_router)
     app.include_router(queue_router)
     app.include_router(library_router)
     app.include_router(config_router)

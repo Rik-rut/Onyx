@@ -161,3 +161,135 @@ def test_seasons_overview_status_calculation(tmp_path):
     assert seasons[1]["status"] == "Upcoming"
     assert seasons[1]["episode_count"] == 1
 
+
+# ------------------- TVMaze discovery (R4.1/R4.2) -------------------
+
+CATALOG = [
+    {
+        "id": 1,
+        "name": "Quiet Drama",
+        "status": "Ended",
+        "premiered": "2001-01-01",
+        "genres": ["Drama"],
+        "weight": 10,
+        "rating": {"average": 9.9},
+        "image": {"medium": "https://img.example/quiet.jpg"},
+        "externals": {"imdb": "tt1"},
+        "summary": "<p>A quiet drama.</p>",
+        "network": {"name": "HBO"},
+    },
+    {
+        "id": 2,
+        "name": "Loud Comedy",
+        "status": "Running",
+        "premiered": "2019-05-05",
+        "genres": ["Comedy", "Drama"],
+        "weight": 99,
+        "rating": {"average": 6.5},
+        "image": {"medium": "https://img.example/loud.jpg"},
+        "externals": {"imdb": "tt2"},
+        "summary": "<p>A loud comedy.</p>",
+        "webChannel": {"name": "Netflix"},
+    },
+    {
+        "id": 3,
+        "name": "Space Anime",
+        "status": "Running",
+        "premiered": "2022-02-02",
+        "genres": ["Anime", "Science-Fiction"],
+        "weight": 40,
+        "rating": {"average": 8.4},
+        "image": {"medium": "https://img.example/space.jpg"},
+        "externals": {"imdb": "tt3"},
+        "summary": "<p>Space.</p>",
+        "network": {"name": "Crunchyroll"},
+    },
+    {
+        "id": 4,
+        "name": "Another Quiet Drama",
+        "status": "Ended",
+        "premiered": "1998-03-03",
+        "genres": ["Drama"],
+        "weight": 5,
+        "rating": {"average": 7.1},
+        "image": {"medium": "https://img.example/another.jpg"},
+        "externals": {"imdb": "tt4"},
+        "summary": "<p>Another drama.</p>",
+        "network": {"name": "BBC"},
+    },
+]
+
+
+def test_trending_tv_ranks_cached_catalog_by_weight(tmp_path):
+    with respx.mock:
+        respx.get(f"{BASE}/shows").mock(return_value=httpx.Response(200, json=CATALOG))
+        c = TvmazeClient(cfg(), cache_dir=tmp_path)
+        items = c.trending_tv(limit=3)
+
+    assert [i["id"] for i in items] == [2, 3, 1]  # weight desc
+    assert items[0]["title"] == "Loud Comedy"
+    assert items[0]["poster"] == "https://img.example/loud.jpg"
+    assert items[0]["rating"] == 6.5
+    assert items[0]["media_type"] == "tv"
+
+
+def test_tv_catalog_is_cached_between_calls(tmp_path):
+    with respx.mock:
+        route = respx.get(f"{BASE}/shows").mock(
+            return_value=httpx.Response(200, json=CATALOG)
+        )
+        c = TvmazeClient(cfg(), cache_dir=tmp_path)
+        c.trending_tv(limit=2)
+        first_calls = route.call_count
+        c.tv_by_genre("Drama", limit=2)
+        second_calls = route.call_count
+
+    assert first_calls >= 1
+    assert second_calls == first_calls  # second use is served from the disk cache
+
+
+def test_tv_by_genre_filters_and_ranks(tmp_path):
+    with respx.mock:
+        respx.get(f"{BASE}/shows").mock(return_value=httpx.Response(200, json=CATALOG))
+        c = TvmazeClient(cfg(), cache_dir=tmp_path)
+        items = c.tv_by_genre("Drama", limit=2)
+
+    assert [i["id"] for i in items] == [2, 1]
+    assert all("Drama" in i["genres"] for i in items)
+
+
+def test_similar_shows_prefers_shared_genres(tmp_path):
+    with respx.mock:
+        respx.get(f"{BASE}/shows").mock(return_value=httpx.Response(200, json=CATALOG))
+        respx.get(f"{BASE}/shows/2").mock(
+            return_value=httpx.Response(200, json=CATALOG[1])
+        )
+        c = TvmazeClient(cfg(), cache_dir=tmp_path)
+        items = c.similar_shows(2, limit=4)
+
+    ids = [i["id"] for i in items]
+    assert 2 not in ids
+    # only the two dramas share a genre with "Loud Comedy", ranked by weight
+    assert ids == [1, 4]
+    assert items[0]["title"] == "Quiet Drama"
+
+
+def test_trending_tv_returns_empty_when_catalog_unavailable(tmp_path):
+    with respx.mock:
+        respx.get(f"{BASE}/shows").mock(return_value=httpx.Response(503, text="down"))
+        c = TvmazeClient(cfg(), cache_dir=tmp_path)
+        assert c.trending_tv(limit=5) == []
+        assert c.tv_by_genre("Drama", limit=5) == []
+
+
+def test_tv_details_includes_summary_and_genres(tmp_path):
+    with respx.mock:
+        respx.get(f"{BASE}/shows/3").mock(return_value=httpx.Response(200, json=CATALOG[2]))
+        c = TvmazeClient(cfg(), cache_dir=tmp_path)
+        d = c.tv_show_summary(3)
+
+    assert d["title"] == "Space Anime"
+    assert d["genres"] == ["Anime", "Science-Fiction"]
+    assert d["rating"] == 8.4
+    assert d["network"] == "Crunchyroll"
+

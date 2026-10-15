@@ -449,6 +449,147 @@ def test_download_release_allows_new_movie(client: TestClient) -> None:
         mock_enq.assert_called_once()
 
 
+def test_api_discover_returns_rails_with_availability(
+    client: TestClient, test_cfg: Config
+) -> None:
+    """R4.1: the Discover homepage is one zero-config call away."""
+    folder = Path(test_cfg.get("library_root")) / "movies" / "Inception (2010)"
+    folder.mkdir(parents=True)
+    (folder / "Inception (2010).mkv").write_bytes(b"x" * 256)
+
+    movies = [
+        {
+            "imdb_id": "tt1375666",
+            "title": "Inception",
+            "year": 2010,
+            "poster": "p.jpg",
+            "rating": 8.8,
+        }
+    ]
+    tv = [{"id": 3, "title": "Space Anime", "year": 2022, "poster": "s.jpg", "rating": 8.4}]
+    with (
+        patch("arr.metadata.imdb.ImdbClient.trending_movies", return_value=movies),
+        patch("arr.metadata.imdb.ImdbClient.top_rated_movies", return_value=movies),
+        patch("arr.metadata.tvmaze.TvmazeClient.trending_tv", return_value=tv),
+    ):
+        resp = client.get("/api/discover")
+        assert resp.status_code == 200
+        data = resp.json()
+
+    assert data["trending_movies"][0]["title"] == "Inception"
+    assert data["trending_movies"][0]["in_library"] is True
+    assert data["trending_movies"][0]["library_status"] == "available"
+    assert data["top_rated_movies"][0]["title"] == "Inception"
+    assert data["trending_tv"][0]["title"] == "Space Anime"
+    assert data["spotlight"]["title"] == "Inception"
+    assert "Action" in data["genres"]
+
+
+def test_api_discover_survives_offline_scrapers(client: TestClient) -> None:
+    """Blocked scrapers must still render an empty-but-valid Discover page."""
+    with (
+        patch("arr.metadata.imdb.ImdbClient.trending_movies", return_value=[]),
+        patch("arr.metadata.imdb.ImdbClient.top_rated_movies", return_value=[]),
+        patch("arr.metadata.tvmaze.TvmazeClient.trending_tv", return_value=[]),
+    ):
+        resp = client.get("/api/discover")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["trending_movies"] == []
+    assert data["spotlight"] is None
+
+
+def test_api_discover_genre(client: TestClient) -> None:
+    movies = [{"imdb_id": "tt0468569", "title": "The Dark Knight", "year": 2008}]
+    tv = [{"id": 3, "title": "Space Anime", "year": 2022}]
+    with patch("arr.metadata.imdb.ImdbClient.movies_by_genre", return_value=movies) as mock_movie:
+        resp = client.get("/api/discover/genre?genre=Action&media_type=movie")
+        assert resp.status_code == 200
+        assert resp.json()["items"][0]["title"] == "The Dark Knight"
+        mock_movie.assert_called_once()
+    with patch("arr.metadata.tvmaze.TvmazeClient.tv_by_genre", return_value=tv):
+        resp = client.get("/api/discover/genre?genre=Anime&media_type=tv")
+        assert resp.status_code == 200
+        data = resp.json()
+    assert data["media_type"] == "tv"
+    assert data["items"][0]["title"] == "Space Anime"
+
+
+def test_api_movie_details_rich(client: TestClient, test_cfg: Config) -> None:
+    details = {
+        "id": "tt1375666",
+        "imdb_id": "tt1375666",
+        "title": "Inception",
+        "year": 2010,
+        "overview": "A thief who steals corporate secrets.",
+        "rating": 8.8,
+        "genres": ["Action", "Sci-Fi"],
+        "runtime": 148,
+        "poster": "https://img.example/i.jpg",
+        "stars": ["Leonardo DiCaprio"],
+        "similar": [
+            {"imdb_id": "tt0209144", "title": "Memento", "year": 2000, "poster": "m.jpg"}
+        ],
+    }
+    with patch("arr.metadata.imdb.ImdbClient.movie_details", return_value=details):
+        resp = client.get("/api/movie/tt1375666/details")
+        assert resp.status_code == 200
+        data = resp.json()
+
+    assert data["overview"].startswith("A thief")
+    assert data["rating"] == 8.8
+    assert data["genres"] == ["Action", "Sci-Fi"]
+    assert data["similar"][0]["title"] == "Memento"
+    assert data["similar"][0]["in_library"] is False
+    assert data["in_library"] is False
+    assert data["degraded"] is False
+
+
+def test_api_movie_details_degrades_when_blocked(client: TestClient) -> None:
+    """A blocked IMDb page must not break the detail modal (R4.2)."""
+    from arr.metadata.imdb import ImdbError
+
+    with patch("arr.metadata.imdb.ImdbClient.movie_details", side_effect=ImdbError("blocked")):
+        resp = client.get("/api/movie/tt1375666/details")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["degraded"] is True
+    assert data["imdb_id"] == "tt1375666"
+    assert data["similar"] == []
+
+
+def test_tv_details_includes_similar_shows(client: TestClient) -> None:
+    from arr.core.models import Series
+
+    series = Series(tmdb_id=10, title="Show", year=2020, imdb_id="tt10", status="Ended")
+    summary = {
+        "id": 10,
+        "title": "Show",
+        "year": 2020,
+        "rating": 8.1,
+        "genres": ["Drama"],
+        "poster": "p.jpg",
+        "network": "HBO",
+        "summary": "A show.",
+    }
+    similar = [{"id": 11, "title": "Other Show", "year": 2019, "genres": ["Drama"]}]
+    with (
+        patch("arr.metadata.tvmaze.TvmazeClient.tv_details", return_value=series),
+        patch("arr.metadata.tvmaze.TvmazeClient._get", return_value=[]),
+        patch("arr.metadata.tvmaze.TvmazeClient.tv_show_summary", return_value=summary),
+        patch("arr.metadata.tvmaze.TvmazeClient.similar_shows", return_value=similar),
+    ):
+        resp = client.get("/api/tv/10/details")
+        assert resp.status_code == 200
+        data = resp.json()
+
+    assert data["overview"] == "A show."
+    assert data["rating"] == 8.1
+    assert data["poster"] == "p.jpg"
+    assert data["network"] == "HBO"
+    assert data["similar"][0]["title"] == "Other Show"
+
+
 def test_priority_up_and_down(client: TestClient) -> None:
     with patch("arr.web.routes.queue._get_rpc") as mock_rpc_fn:
         mock_rpc = AsyncMock()

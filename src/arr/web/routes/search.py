@@ -138,6 +138,20 @@ async def get_tv_details(request: Request, show_id: int) -> dict[str, Any]:
             for ep in season["episodes"]:
                 ep["available"] = int(ep.get("episode_number") or 0) in present
 
+        # R4.2: rich show metadata (poster, rating, genres, network, synopsis)
+        # plus "More Like This" recommendations, degrading safely offline.
+        show_meta: dict[str, Any] = {}
+        try:
+            show_meta = await asyncio.to_thread(tvmaze.tv_show_summary, show_id)
+        except Exception as e:
+            logger.debug(f"TVMaze summary unavailable for {show_id}: {e}")
+        similar: list[dict[str, Any]] = []
+        try:
+            similar = await asyncio.to_thread(tvmaze.similar_shows, show_id, 10)
+        except Exception as e:
+            logger.debug(f"TVMaze similar lookup failed for {show_id}: {e}")
+        similar = await asyncio.to_thread(annotate_availability, cfg, similar, "tv")
+
         return {
             "id": series.tmdb_id,
             "title": series.title,
@@ -150,6 +164,12 @@ async def get_tv_details(request: Request, show_id: int) -> dict[str, Any]:
             "library_status": availability.get("status"),
             "monitored": bool(availability.get("monitored")),
             "available_seasons": available_seasons,
+            "overview": show_meta.get("summary") or "",
+            "rating": show_meta.get("rating"),
+            "genres": show_meta.get("genres") or [],
+            "poster": show_meta.get("poster") or "",
+            "network": show_meta.get("network") or "",
+            "similar": similar,
         }
     except Exception as e:
         logger.error(f"Failed to fetch show details for ID {show_id}: {e}")
