@@ -64,4 +64,15 @@ def _no_external_network(monkeypatch):
 
     monkeypatch.setattr(socket.socket, "connect", guarded_connect, raising=True)
     monkeypatch.setattr(socket.socket, "connect_ex", guarded_connect_ex, raising=True)
+
+    # curl_cffi talks through libcurl and bypasses the socket module entirely.
+    try:
+        from curl_cffi import requests as curl_requests
+
+        def blocked_curl(*args, **kwargs):
+            raise NetworkAccessAttempted("unit tests must stay offline (curl_cffi call)")
+
+        monkeypatch.setattr(curl_requests, "get", blocked_curl, raising=True)
+    except ImportError:  # pragma: no cover - curl_cffi is a hard dependency
+        pass
     yield

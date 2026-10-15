@@ -79,7 +79,12 @@ def subtitle_files(root: Path) -> list[Path]:
 
 
 def subtitle_files_adjacent(media_file: Path) -> list[Path]:
-    """Find subtitle files sharing the base name of a single media file in the same directory."""
+    """Find subtitle files sharing the base name of a single media file in the same directory.
+
+    The remainder after the media stem must be a language tag (optionally with a
+    variant/index), so deleting `Movie (2018).mkv` never strips the subtitles of
+    a sibling `Movie (2018).2.mkv`.
+    """
     parent = media_file.parent
     if not parent.exists():
         return []
@@ -89,13 +94,19 @@ def subtitle_files_adjacent(media_file: Path) -> list[Path]:
         for p in sorted(parent.iterdir()):
             if p.is_file() and p.suffix.lower() in SUB_EXTS:
                 p_stem = p.stem.lower()
-                if (
-                    p_stem == base
-                    or p_stem.startswith(base + ".")
-                    or p_stem.startswith(base + "_")
-                    or p_stem.startswith(base + "-")
-                ):
+                if p_stem == base:
                     out.append(p)
+                    continue
+                for sep in (".", "_", "-"):
+                    prefix = base + sep
+                    if not p_stem.startswith(prefix):
+                        continue
+                    remainder = p_stem[len(prefix):].replace("_", " ").replace("-", " ").split()
+                    if remainder and remainder[0] in _LANG_ALIASES or (
+                        remainder and remainder[0] in _LANG_CODES
+                    ):
+                        out.append(p)
+                    break
     except OSError:
         pass
     return out
@@ -590,6 +601,10 @@ def _cleanup_movie_folders(movies: Path, library_root: Path, *, mode: str) -> in
         if target is None:
             final = import_movie(raw, library_root, title, year, mode=mode)
             if final is None:
+                continue
+            leftovers = [f for f in media_files(raw) if f.exists()]
+            if leftovers:
+                # Never destroy media that did not make it into the library.
                 continue
             target = final.parent
             clean.append(target)

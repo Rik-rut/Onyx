@@ -282,6 +282,22 @@ def test_trending_tv_returns_empty_when_catalog_unavailable(tmp_path):
         assert c.tv_by_genre("Drama", limit=5) == []
 
 
+def test_tv_catalog_recovers_from_corrupt_cache(tmp_path):
+    """MI-04: a torn cache file must be refetched, not silently return nothing."""
+    with respx.mock:
+        respx.get(f"{BASE}/shows").mock(return_value=httpx.Response(200, json=CATALOG))
+        c = TvmazeClient(cfg(), cache_dir=tmp_path)
+        # Seed a valid cache, then corrupt it (simulating an interrupted write)
+        assert c.trending_tv(limit=1)
+        cache_files = list(tmp_path.glob("shows_catalog_*.json"))
+        assert cache_files
+        cache_files[0].write_text('{"nodes": [', encoding="utf-8")
+
+        items = c.trending_tv(limit=2)
+
+    assert [i["id"] for i in items] == [2, 3]
+
+
 def test_tv_details_includes_summary_and_genres(tmp_path):
     with respx.mock:
         respx.get(f"{BASE}/shows/3").mock(return_value=httpx.Response(200, json=CATALOG[2]))

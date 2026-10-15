@@ -1071,12 +1071,25 @@ def _remove_torrent_after_import(cfg: Config, infohash: str) -> None:
         pass
 
 
+def _unimported_media(content: Path) -> list[Path]:
+    """Media files still sitting in a raw folder after a move import."""
+    p = Path(content)
+    if p.is_dir():
+        return media_files(p)
+    return [p] if p.exists() and p.suffix.lower() in MEDIA_EXTS else []
+
+
 def _finalize_move_import(rec: dict, cfg: Config, content: Path | None) -> None:
     """Clean up after a move import: delete the raw release folder (R2.2).
 
     With `import_mode = "move"` the media and subtitles now live in the clean
     library folder, so the raw torrent directory (leftover junk, extras) and the
     torrent itself must disappear to guarantee a single copy on disk.
+
+    The raw folder is only removed once nothing importable is left inside it:
+    deleting a season pack that was recorded as a single episode, or a folder
+    holding several titles, would silently destroy media that never reached the
+    library.
     """
     library = _library_root(cfg)
     if content is not None:
@@ -1084,8 +1097,15 @@ def _finalize_move_import(rec: dict, cfg: Config, content: Path | None) -> None:
         boundary = prune_boundary(p, library)
         # Never delete a library/staging root itself — only releases below it.
         if boundary in p.parents and p.exists():
-            delete_path(p)
-            prune_empty_dirs(p.parent, boundary)
+            leftovers = _unimported_media(p)
+            if leftovers:
+                logger.warning(
+                    f"Keeping raw folder '{p.name}': {len(leftovers)} media file(s) were not "
+                    f"imported ({', '.join(f.name for f in leftovers[:4])})"
+                )
+            else:
+                delete_path(p)
+                prune_empty_dirs(p.parent, boundary)
     _remove_torrent_after_import(cfg, str(rec.get("infohash") or ""))
 
 
@@ -1267,6 +1287,19 @@ def get_status(download_id, cfg):
     return row or {"error": "not found"}
 
 
+def _ambiguous_matches(torrent_id: str, db: DB) -> list[str]:
+    """Infohashes that a short/partial id could refer to (more than one = unsafe)."""
+    tid = str(torrent_id or "").strip().lower()
+    if not tid or len(tid) >= 40:
+        return []
+    matches = [
+        str(rec.get("infohash"))
+        for rec in db.list_downloads()
+        if str(rec.get("infohash") or "").lower().startswith(tid)
+    ]
+    return matches
+
+
 def match_torrent(torrent_id: str, torrents: list[dict]) -> dict | None:
     """Match a queue id to a live torrent.
 
@@ -1296,16 +1329,24 @@ def _delete_media_path(path: Path, cfg: Config) -> bool:
     library = _library_root(cfg)
     p = Path(path)
     boundary = prune_boundary(p, library)
+    if p == boundary or boundary not in p.parents:
+        # Never remove a library/staging root itself — only entries below it.
+        if p.exists():
+            logger.warning(f"Refusing to delete protected path: {p}")
+        return False
     if p.is_dir():
         removed = delete_path(p)
-        if removed:
-            prune_empty_dirs(p, boundary)
+        if not removed and p.exists():
+            logger.warning(f"Could not remove directory: {p}")
+        prune_empty_dirs(p.parent, boundary)
         return removed
     removed = False
     for sub in subtitle_files_adjacent(p):
         removed = delete_path(sub) or removed
     removed = delete_path(p) or removed
-    if removed:
+    if p.exists():
+        logger.warning(f"Could not remove file: {p}")
+    else:
         prune_empty_dirs(p.parent, boundary)
     return removed
 
@@ -1332,6 +1373,24 @@ async def remove_download_and_files(
     }
     db = _db(cfg)
     try:
+        # A short id can match several infohashes: refuse rather than delete one
+        # of them by accident.
+        candidates = _ambiguous_matches(str(torrent_id), db)
+        if len(candidates) > 1:
+            logger.warning(
+                f"Refusing to remove '{torrent_id}': matches {len(candidates)} downloads"
+            )
+            return {
+                "infohash": "",
+                "torrent_found": False,
+                "record_found": True,
+                "torrent_removed": False,
+                "db_removed": False,
+                "deleted_paths": [],
+                "rpc_error": None,
+                "ambiguous": True,
+                "candidates": candidates,
+            }
         rec = db.get_download(str(torrent_id))
         rpc: RpcClient | None = None
         torrents: list[dict] = []
@@ -1358,7 +1417,8 @@ async def remove_download_and_files(
         # 1. Transmission: drop the torrent and, unless disabled, its payload.
         # When listing already failed the daemon is unreachable, so there is no
         # verified target to remove and the RPC error is reported instead.
-        if rpc is not None and rpc_error is None:
+        synthetic = infohash.startswith(_DISK_HASH_PREFIX)
+        if rpc is not None and rpc_error is None and not (synthetic and torrent is None):
             cid: int | str = (
                 _coerce_torrent_id(str(torrent.get("id")))
                 if torrent is not None
@@ -1791,6 +1851,29 @@ def sync_disk_library(cfg: Config, db: DB | None = None) -> dict[str, int]:
     return stats
 
 
+def _record_covers_entry(rec: dict, entry: Path, media: Path | None) -> bool:
+    """Does an existing download record already track this library entry?
+
+    Web-UI downloads store the *release* name as the record title, so a title
+    comparison alone would mint a duplicate `disk-` row for a movie that is
+    already tracked. Any recorded path inside the entry (or the entry itself)
+    counts as coverage.
+    """
+    for key in ("destination_path", "content_path", "download_dir"):
+        value = rec.get(key)
+        if not value:
+            continue
+        try:
+            recorded = Path(str(value))
+        except (OSError, ValueError):
+            continue
+        if recorded == entry or entry in recorded.parents:
+            return True
+        if media is not None and recorded == media:
+            return True
+    return False
+
+
 def _sync_disk_movies(cfg: Config, db: DB) -> int:
     movies_dir = _library_root(cfg) / "movies"
     if not movies_dir.is_dir():
@@ -1807,7 +1890,9 @@ def _sync_disk_movies(cfg: Config, db: DB) -> int:
         if not title or title == "Unknown":
             continue
         if any(
-            _movie_matches(r.get("title"), r.get("year"), title, year) for r in records
+            _movie_matches(r.get("title"), r.get("year"), title, year)
+            or _record_covers_entry(r, entry, media)
+            for r in records
         ):
             continue
         imdb_id = None
@@ -1917,11 +2002,13 @@ def check_media_availability(
                 state = str(rec.get("state") or "")
                 if state == "imported":
                     destination = rec.get("destination_path")
-                    result.update(
-                        in_library=destination is not None,
-                        status="available",
-                        path=str(destination) if destination else None,
-                    )
+                    # A record whose file is gone must not report a phantom copy.
+                    if destination and Path(str(destination)).exists():
+                        result.update(in_library=True, status="available", path=str(destination))
+                    else:
+                        fallback = rec.get("content_path")
+                        if fallback and Path(str(fallback)).exists():
+                            result.update(in_library=True, status="available", path=str(fallback))
                 elif state in ("queued", "added", "downloading", "completed"):
                     result["status"] = "queued"
             return result

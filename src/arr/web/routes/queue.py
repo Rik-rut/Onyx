@@ -199,12 +199,32 @@ async def resume_torrent(request: Request, torrent_id: str) -> dict[str, str]:
 
 @router.post("/{torrent_id}/delete")
 @router.delete("/{torrent_id}")
-async def delete_torrent(request: Request, torrent_id: str) -> dict[str, Any]:
-    """Remove a queue item: torrent, downloaded files, and local queue state (R1.1/R1.2)."""
+async def delete_torrent(
+    request: Request, torrent_id: str, body: DeleteConfirmation | None = None
+) -> dict[str, Any]:
+    """Remove a queue item: torrent, downloaded files, and local queue state.
+
+    R1.1/R1.2 require the files to go too, so the call must carry an explicit
+    JSON confirmation: a cross-site HTML form post (which cannot set
+    `Content-Type: application/json`) is rejected before anything is deleted.
+    """
+    if body is None or not body.confirm:
+        raise HTTPException(
+            status_code=422,
+            detail="Removal deletes the downloaded files: resend with {\"confirm\": true}.",
+        )
     cfg = request.app.state.cfg
     logger.info(f"Removing torrent {torrent_id} and its downloaded files")
     try:
         result = await remove_download_and_files(str(torrent_id), cfg)
+        if result.get("ambiguous"):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"'{torrent_id}' matches {len(result.get('candidates') or [])} downloads; "
+                    "use the full infohash."
+                ),
+            )
         logger.info(
             f"Removed torrent {torrent_id} "
             f"[infohash={str(result['infohash'])[:12]}, "
@@ -339,7 +359,7 @@ async def download_release(request: Request, body: DownloadReleaseRequest) -> di
         except Exception as e:
             logger.debug(f"Availability check failed for '{body.title}': {e}")
             availability = {}
-        if availability.get("in_library") or availability.get("status") == "available":
+        if availability.get("in_library"):
             label = body.display_title or body.title
             detail = (
                 f"Already in Library — '{label}' is already downloaded in your library. "
@@ -357,6 +377,7 @@ async def download_release(request: Request, body: DownloadReleaseRequest) -> di
             imdb_id=body.imdb_id,
             tmdb_id=body.tmdb_id,
             year=body.year,
+            force=body.force,
         )
         if not ok:
             logger.error(f"Failed to enqueue release '{body.title}': {res}")
@@ -368,6 +389,12 @@ async def download_release(request: Request, body: DownloadReleaseRequest) -> di
     except Exception as e:
         logger.error(f"Failed to enqueue release '{body.title}': {e}")
         raise HTTPException(status_code=500, detail=f"Failed to enqueue release: {e}") from e
+
+
+class DeleteConfirmation(BaseModel):
+    """Body of a destructive queue removal; must be sent as JSON."""
+
+    confirm: bool = False
 
 
 class DownloadMagnetRequest(BaseModel):

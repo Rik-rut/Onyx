@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import sys
 import time
@@ -286,7 +287,9 @@ class TvmazeClient:
                     pass
             return []
         try:
-            path.write_text(json.dumps(shows), encoding="utf-8")
+            tmp_path = path.with_suffix(".tmp")
+            tmp_path.write_text(json.dumps(shows), encoding="utf-8")
+            os.replace(tmp_path, path)
         except OSError:
             pass
         return shows

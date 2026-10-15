@@ -154,7 +154,7 @@ def test_queue_delete_removes_torrent_files_and_record(
             "arr.transmission.process.RpcClient.remove", new_callable=AsyncMock
         ) as mock_remove,
     ):
-        resp = client.delete(f"/api/queue/{hash_}")
+        resp = client.request("DELETE", f"/api/queue/{hash_}", json={"confirm": True})
         assert resp.status_code == 200
         mock_remove.assert_called_once_with(4, delete_data=True)
 
@@ -208,7 +208,7 @@ def test_api_queue_list_and_controls(client: TestClient) -> None:
         ),
         patch("arr.transmission.process.RpcClient.remove", new_callable=AsyncMock) as mock_remove,
     ):
-        resp = client.post("/api/queue/1/delete")
+        resp = client.post("/api/queue/1/delete", json={"confirm": True})
         assert resp.status_code == 200
         mock_remove.assert_called_once_with(1, delete_data=True)
 
@@ -597,6 +597,60 @@ def test_tv_details_includes_similar_shows(client: TestClient) -> None:
     assert data["similar"][0]["title"] == "Other Show"
 
 
+def test_download_release_force_reaches_enqueue(client: TestClient, test_cfg: Config) -> None:
+    """CR-02: confirming the duplicate warning must actually enqueue the release."""
+    payload = {
+        "indexer": "yts",
+        "title": "Inception.2010.1080p",
+        "infohash": "h999",
+        "magnet": "magnet:?xt=urn:btih:h999",
+        "media_type": "movie",
+        "year": 2010,
+        "display_title": "Inception",
+        "force": True,
+    }
+    with patch(
+        "arr.web.routes.queue.enqueue_release", new_callable=AsyncMock, return_value=(True, "added")
+    ) as mock_enq:
+        resp = client.post("/api/queue/download/release", json=payload)
+
+    assert resp.status_code == 200
+    assert mock_enq.await_count == 1
+    assert mock_enq.await_args.kwargs.get("force") is True
+
+
+def test_queue_delete_requires_explicit_confirmation(
+    client: TestClient, test_cfg: Config
+) -> None:
+    """CR-03: a blind cross-site POST must not delete files."""
+    from arr.pipeline import _db
+
+    hash_ = "c" * 40
+    folder = Path(test_cfg.get("library_root")) / "movies" / "Inception (2010)"
+    folder.mkdir(parents=True)
+    media = folder / "Inception (2010).mkv"
+    media.write_bytes(b"x" * 256)
+    db = _db(test_cfg)
+    db.add_download(hash_, media_type="movie", title="Inception", year=2010, state="queued")
+    db.set_download_state(hash_, "imported", destination_path=str(media))
+    db.close()
+
+    # No JSON body (what a cross-site HTML form can send) => refused, nothing deleted
+    resp = client.post(f"/api/queue/{hash_}/delete")
+    assert resp.status_code == 422
+    assert media.exists()
+
+    # Explicit confirmation succeeds
+    with patch(
+        "arr.transmission.process.RpcClient.list_torrents",
+        new_callable=AsyncMock,
+        return_value=[],
+    ):
+        resp = client.post(f"/api/queue/{hash_}/delete", json={"confirm": True})
+    assert resp.status_code == 200
+    assert not media.exists()
+
+
 def test_priority_up_and_down(client: TestClient) -> None:
     with patch("arr.web.routes.queue._get_rpc") as mock_rpc_fn:
         mock_rpc = AsyncMock()
@@ -685,6 +739,31 @@ def test_index_page_phase6_elements(client: TestClient) -> None:
     assert "priorityDown" in resp.text
     assert "filteredReleases" in resp.text
     assert "subtitleLanguagesInput" in resp.text
+
+
+def test_web_startup_runs_library_maintenance(test_cfg: Config) -> None:
+    """IM-05: app startup must normalise the library and index disk media (R2.3/R3.1)."""
+    import arr.pipeline as pipeline
+
+    app = create_app(test_cfg)
+    calls: list[str] = []
+    with (
+        patch(
+            "arr.pipeline.cleanup_duplicate_folders",
+            side_effect=lambda *a, **k: calls.append("cleanup") or 0,
+        ),
+        patch(
+            "arr.pipeline.sync_disk_library",
+            side_effect=lambda *a, **k: calls.append("sync")
+            or {"movies": 0, "shows": 0, "episodes": 0, "monitored": 0},
+        ),
+        TestClient(app) as client,
+    ):
+        assert client.get("/").status_code == 200
+
+    assert "cleanup" in calls
+    assert "sync" in calls
+    assert pipeline is not None
 
 
 def test_index_page_discover_homepage(client: TestClient) -> None:
@@ -838,7 +917,7 @@ def test_queue_actions_accept_infohash_string(client: TestClient) -> None:
             new_callable=AsyncMock,
             return_value=[],
         ):
-            resp = client.post(f"/api/queue/{hash_str}/delete")
+            resp = client.post(f"/api/queue/{hash_str}/delete", json={"confirm": True})
             assert resp.status_code == 200
         m_remove.assert_called_with(hash_str, delete_data=True)
 

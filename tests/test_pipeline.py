@@ -1071,6 +1071,214 @@ def test_check_media_availability_tv_without_disk_or_db(tmp_path):
     assert res["monitored"] is False
 
 
+def test_move_import_keeps_raw_folder_when_media_is_unimported(tmp_path, monkeypatch):
+    """CR-01: never delete raw media that was not actually imported."""
+    cfg = make_cfg(tmp_path, import_mode="move")
+    # A season pack recorded as a single episode: only E01 gets imported.
+    content = tmp_path / "downloads" / ".staging" / "tv-shows" / "Show.S01.1080p"
+    content.mkdir(parents=True)
+    for ep in range(1, 4):
+        (content / f"Show.S01E{ep:02d}.mkv").write_bytes(bytes([ep]) * 256)
+
+    db = DB(tmp_path / "arr.db")
+    hash_ = "1" * 40
+    db.add_download(
+        hash_, media_type="tv", title="Show", year=2020, tmdb_id=10, season=1, episode=1,
+        download_dir=str(content), state="completed",
+    )
+    rec = db.get_download(hash_)
+    rpc = FakeImportRpc()
+    monkeypatch.setattr(pipeline, "_rpc", lambda c: rpc)
+    monkeypatch.setattr(pipeline, "ensure_subtitles", lambda *a, **k: None)
+
+    final = pipeline._import_record(rec, cfg, db)
+
+    season_dir = tmp_path / "downloads" / "tv-shows" / "Show (2020)" / "Season 01"
+    assert final is not None and final.exists()
+    assert (season_dir / "Show - S01E01.mkv").exists()
+    # the raw folder survives because E02/E03 were never imported
+    assert content.exists()
+    assert sorted(p.name for p in content.iterdir()) == ["Show.S01E02.mkv", "Show.S01E03.mkv"]
+    db.close()
+
+
+def test_move_import_deletes_raw_folder_once_everything_is_imported(tmp_path, monkeypatch):
+    """The happy path still collapses to a single folder (R2.2)."""
+    cfg = make_cfg(tmp_path, import_mode="move")
+    content = tmp_path / "downloads" / ".staging" / "movies" / "Inception.2010.1080p"
+    content.mkdir(parents=True)
+    (content / "Inception.2010.1080p.mkv").write_bytes(b"x" * 1024)
+    (content / "poster.jpg").write_bytes(b"junk")
+
+    db = DB(tmp_path / "arr.db")
+    hash_ = "2" * 40
+    db.add_download(
+        hash_, media_type="movie", title="Inception", year=2010,
+        download_dir=str(content), state="completed",
+    )
+    rec = db.get_download(hash_)
+    monkeypatch.setattr(pipeline, "_rpc", lambda c: FakeImportRpc())
+    monkeypatch.setattr(pipeline, "ensure_subtitles", lambda *a, **k: None)
+
+    pipeline._import_record(rec, cfg, db)
+
+    assert not content.exists()
+    db.close()
+
+
+def test_cleanup_keeps_raw_movie_folder_when_everything_is_not_importable(tmp_path):
+    """CR-01 in the startup cleanup: two movies in one folder must not lose one."""
+    from arr.importer.layout import cleanup_duplicate_folders
+
+    movies = tmp_path / "downloads" / "movies"
+    raw = movies / "Double.Feature.2020.1080p.BluRay.x264"
+    raw.mkdir(parents=True)
+    (raw / "MovieA.2020.1080p.mkv").write_bytes(b"a" * 2048)
+    (raw / "MovieB.2021.1080p.mkv").write_bytes(b"b" * 1024)
+
+    cleanup_duplicate_folders(tmp_path / "downloads")
+
+    # The import moved the primary file into a clean folder...
+    clean = movies / "Double Feature (2020)"
+    assert clean.exists()
+    # ...but the second movie must not have been destroyed with the raw folder.
+    remaining = list(raw.glob("*.mkv")) if raw.exists() else []
+    assert [p.name for p in remaining] == ["MovieB.2021.1080p.mkv"]
+
+
+def test_check_media_availability_ignores_deleted_destination(tmp_path):
+    """IM-01: a record whose file vanished must not report 'available'."""
+    cfg = make_cfg(tmp_path)
+    missing = tmp_path / "downloads" / "movies" / "Inception (2010)" / "Inception (2010).mkv"
+    db = pipeline._db(cfg)
+    db.add_download("m" * 40, media_type="movie", title="Inception", year=2010)
+    db.set_download_state("m" * 40, "imported", destination_path=str(missing))
+    db.close()
+
+    res = pipeline.check_media_availability(cfg, media_type="movie", title="Inception", year=2010)
+
+    assert res["in_library"] is False
+    assert res["status"] is None
+
+
+def test_sync_disk_library_skips_movies_tracked_under_release_names(tmp_path, monkeypatch):
+    """IM-02: an imported record for the same movie must not be duplicated."""
+    cfg = make_cfg(tmp_path)
+    folder = tmp_path / "downloads" / "movies" / "Inception (2010)"
+    folder.mkdir(parents=True)
+    media = folder / "Inception (2010).mkv"
+    media.write_bytes(b"x" * 512)
+
+    db = pipeline._db(cfg)
+    db.add_download(
+        "r" * 40,
+        media_type="movie",
+        title="Inception.2010.1080p.BluRay.x264-[YTS.AG]",
+        year=2010,
+        state="queued",
+    )
+    db.set_download_state("r" * 40, "imported", destination_path=str(media))
+
+    monkeypatch.setattr(pipeline, "ImdbClient", FakeImdbClient)
+    stats = pipeline.sync_disk_library(cfg, db)
+
+    assert stats["movies"] == 0  # already tracked -> no synthetic disk row
+    rows = [r for r in db.list_downloads() if r["media_type"] == "movie"]
+    assert len(rows) == 1
+    assert not rows[0]["infohash"].startswith("disk-")
+    db.close()
+
+
+def test_delete_media_path_preserves_other_files_subtitles(tmp_path):
+    """IM-03: removing one movie must not strip a sibling file's subtitles."""
+    cfg = make_cfg(tmp_path)
+    folder = tmp_path / "downloads" / "movies" / "Movie (2018)"
+    folder.mkdir(parents=True)
+    first = folder / "Movie (2018).mkv"
+    second = folder / "Movie (2018).2.mkv"
+    first.write_bytes(b"1" * 256)
+    second.write_bytes(b"2" * 256)
+    sibling_sub = folder / "Movie (2018).2.en.srt"
+    sibling_sub.write_text("second movie subtitles")
+    own_sub = folder / "Movie (2018).en.srt"
+    own_sub.write_text("first movie subtitles")
+
+    pipeline._delete_media_path(first, cfg)
+
+    assert not first.exists()
+    assert not own_sub.exists()
+    assert sibling_sub.exists()  # belongs to the untouched second movie
+    assert second.exists()
+
+
+def test_remove_download_prunes_emptied_parent_dirs(tmp_path, monkeypatch):
+    """IM-04: deleting a season/episode directory must prune empty parents."""
+    cfg = make_cfg(tmp_path)
+    show = tmp_path / "downloads" / "tv-shows" / "Show (2020)"
+    season = show / "Season 02"
+    season.mkdir(parents=True)
+    (season / "Show - S02E01 - A.mkv").write_bytes(b"x" * 256)
+
+    db = pipeline._db(cfg)
+    hash_ = "s" * 40
+    db.add_download(hash_, media_type="tv", title="Show", year=2020, tmdb_id=10, season=2)
+    db.set_download_state(hash_, "imported", content_path=str(season))
+    db.close()
+
+    monkeypatch.setattr(pipeline, "_rpc", lambda c: FakeRemoveRpc([]))
+
+    pipeline_result = asyncio.run(pipeline.remove_download_and_files(hash_, cfg))
+
+    assert pipeline_result["deleted_paths"]
+    assert not season.exists()
+    assert not show.exists()  # empty show parent pruned too
+    assert (tmp_path / "downloads" / "tv-shows").exists()
+
+
+def test_remove_download_refuses_ambiguous_prefix(tmp_path, monkeypatch):
+    """MI-02: a prefix matching several infohashes must not delete one of them."""
+    cfg = make_cfg(tmp_path)
+    db = pipeline._db(cfg)
+    for prefix, title in (("abcd1", "Victim One"), ("abcd2", "Victim Two")):
+        hash_ = (prefix * 8)[:40]
+        db.add_download(hash_, media_type="movie", title=title, year=2020, state="queued")
+    db.close()
+
+    monkeypatch.setattr(pipeline, "_rpc", lambda c: FakeRemoveRpc([]))
+
+    result = asyncio.run(pipeline.remove_download_and_files("abcd", cfg))
+
+    assert result["ambiguous"] is True
+    assert result["db_removed"] is False
+    db = pipeline._db(cfg)
+    assert len([r for r in db.list_downloads() if r["title"].startswith("Victim")]) == 2
+    db.close()
+
+
+def test_remove_disk_detected_movie_skips_transmission(tmp_path, monkeypatch):
+    """MI-08: a disk-detected row has no torrent, so no RPC removal is attempted."""
+    cfg = make_cfg(tmp_path)
+    folder = tmp_path / "downloads" / "movies" / "Inception (2010)"
+    folder.mkdir(parents=True)
+    media = folder / "Inception (2010).mkv"
+    media.write_bytes(b"x" * 256)
+
+    db = pipeline._db(cfg)
+    db.add_download("disk-abc123", media_type="movie", title="Inception", year=2010)
+    db.set_download_state("disk-abc123", "imported", destination_path=str(media))
+    db.close()
+
+    rpc = FakeRemoveRpc([])
+    monkeypatch.setattr(pipeline, "_rpc", lambda c: rpc)
+
+    result = asyncio.run(pipeline.remove_download_and_files("disk-abc123", cfg))
+
+    assert rpc.removed == []  # nothing was sent to Transmission
+    assert result["rpc_error"] is None
+    assert result["deleted_paths"]
+    assert not media.exists()
+
+
 def test_check_disk_space(tmp_path, monkeypatch):
     from arr.pipeline import check_disk_space
 
