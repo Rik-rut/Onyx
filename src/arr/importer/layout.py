@@ -383,6 +383,238 @@ def prune_empty_dirs(start: Path, stop_at: Path) -> int:
     return removed
 
 
+_YEAR_FOLDER_RE = re.compile(r"^(?P<title>.+?)\s*\((?P<year>(?:19|20)\d{2})\)\s*$")
+_BRACKETS_RE = re.compile(r"[\[\]()]")
+_RAW_TOKEN_RE = re.compile(
+    r"(?:\b\d{3,4}p\b|\b4k\b|\buhd\b|\bbluray\b|\bblu-ray\b|\bbrrip\b|\bbdrip\b|"
+    r"\bwebrip\b|\bweb-dl\b|\bwebdl\b|\bhdtv\b|\bdvdrip\b|\bhdrip\b|\bremux\b|"
+    r"\bx26[45]\b|\bh26[45]\b|\bhevc\b|\bavc\b|\baac\b|\bac3\b|\bdts\b|\bddp\b|"
+    r"\b10bit\b|\b8bit\b|\bs\d{1,2}e\d{1,2}\b|\bs\d{1,2}\b|\byts\b|\byify\b)",
+    re.I,
+)
+_LANG_ALIASES = {
+    "eng": "en", "english": "en", "spa": "es", "spanish": "es", "fre": "fr",
+    "fra": "fr", "french": "fr", "ger": "de", "deu": "de", "german": "de",
+    "ita": "it", "italian": "it", "por": "pt", "pt-br": "pt", "jpn": "ja",
+    "jap": "ja", "jp": "ja", "japanese": "ja", "kor": "ko", "korean": "ko",
+    "chi": "zh", "chs": "zh", "cht": "zh", "rus": "ru",
+}
+
+
+def is_clean_folder_name(name: str) -> bool:
+    """`<Title> (<Year>)` — the single-folder layout Onyx imports into."""
+    return bool(_YEAR_FOLDER_RE.match(str(name).strip()))
+
+
+def folder_title(name: str) -> str:
+    """The title part of a clean folder name (`Show (2025)` -> `Show`)."""
+    m = _YEAR_FOLDER_RE.match(str(name).strip())
+    return (m.group("title") if m else str(name)).strip()
+
+
+def looks_like_raw_release(name: str) -> bool:
+    """True when a folder name carries release tags, i.e. a raw torrent folder."""
+    n = str(name).strip()
+    if not n or n.startswith("."):
+        return False
+    if is_clean_folder_name(n):
+        return False
+    return bool(_RAW_TOKEN_RE.search(_BRACKETS_RE.sub(" ", n)))
+
+
+def parse_raw_release_name(name: str) -> tuple[str, int | None]:
+    """Best-effort `(title, year)` for a raw release folder name."""
+    n = re.sub(r"\s+", " ", _BRACKETS_RE.sub(" ", str(name))).strip()
+    year: int | None = None
+    m = re.search(r"\b((?:19|20)\d{2})\b", n)
+    if m:
+        year = int(m.group(1))
+        n = n[: m.start()]
+    tag = _RAW_TOKEN_RE.search(n)
+    if tag:
+        n = n[: tag.start()]
+    title = sanitize_name(n.replace(".", " ").replace("_", " ").strip())
+    return title, year
+
+
+def subtitle_language(path: Path, default: str = "en") -> str:
+    """Language code for a subtitle file name (`Show.en.srt` -> ``en``)."""
+    tokens = (
+        path.stem.lower().replace(".", " ").replace("_", " ").replace("-", " ").split()
+    )
+    for token in reversed(tokens):
+        if token in _LANG_ALIASES:
+            return _LANG_ALIASES[token]
+        if len(token) == 2 and token.isalpha():
+            return token
+    return default
+
+
+def _carry_subtitles(raw_dir: Path, media_dst: Path) -> int:
+    """Copy subtitles the clean folder is missing (raw folder is being deleted)."""
+    existing = {p.name.lower() for p in subtitle_files_adjacent(media_dst)}
+    carried = 0
+    for sub in subtitle_files(raw_dir):
+        target = media_dst.parent / f"{media_dst.stem}.{subtitle_language(sub)}{sub.suffix}"
+        if target.name.lower() in existing or target.exists():
+            continue
+        try:
+            os.link(str(sub), str(target))
+        except OSError:
+            try:
+                shutil.copy2(str(sub), str(target))
+            except OSError:
+                continue
+        existing.add(target.name.lower())
+        carried += 1
+    return carried
+
+
+def _clean_folder_match(title: str, year: int | None, folders: list[Path]) -> Path | None:
+    safe = sanitize_name(title).lower()
+    if year:
+        target = f"{safe} ({year})"
+        for folder in folders:
+            if folder.name.lower() == target:
+                return folder
+        return None
+    for folder in folders:
+        if folder_title(folder.name).lower() == safe:
+            return folder
+    for folder in folders:
+        if folder.name.lower().startswith(f"{safe} ("):
+            return folder
+    return None
+
+
+def _verify_clean_movie(target: Path, raw: Path, *, mode: str) -> None:
+    """Make sure the surviving clean folder holds the movie and its subtitles."""
+    media = media_files(target)
+    if not media:
+        files = media_files(raw)
+        if files:
+            primary = max(files, key=lambda p: p.stat().st_size)
+            dst = target / f"{target.name}{primary.suffix.lower()}"
+            final = import_file(primary, dst, mode=mode)
+            _carry_subtitles(raw, final)
+        return
+    primary = max(media, key=lambda p: p.stat().st_size)
+    _carry_subtitles(raw, primary)
+
+
+def _episode_tags(media: Path, raw_dir: Path) -> tuple[int | None, int | None]:
+    """Season/episode numbers for one raw episode file (folder name as fallback)."""
+    from arr.core.parsing import parse_release
+
+    parsed = parse_release(media.name) or {}
+    season = parsed.get("season")
+    episode = parsed.get("episode")
+    season = int(season) if isinstance(season, int) else None
+    episode = int(episode) if isinstance(episode, int) else None
+    if season is None:
+        m = re.search(r"(?:^|[^a-z])[Ss](\d{1,2})(?:[^0-9]|$)", raw_dir.name)
+        if m:
+            season = int(m.group(1))
+    return season, episode
+
+
+def _import_missing_episodes(raw: Path, show: Path, library_root: Path, *, mode: str) -> int:
+    """Move episodes the clean show folder does not have; drop duplicate raw copies.
+
+    Returns the number of media files that could not be attributed to an episode
+    (those keep the raw folder alive).
+    """
+    show_title = folder_title(show.name)
+    unplaced = 0
+    for media in list(media_files(raw)):
+        season, episode = _episode_tags(media, raw)
+        if season is None or episode is None:
+            unplaced += 1
+            continue
+        season_dir = show / f"Season {season:02d}"
+        if find_episode_file(season_dir, season, episode) is not None:
+            # already in the library: the raw copy is redundant
+            delete_path(media)
+            continue
+        season_dir.mkdir(parents=True, exist_ok=True)
+        dst = season_dir / f"{show_title} - S{season:02d}E{episode:02d}{media.suffix.lower()}"
+        try:
+            final = import_file(media, dst, mode=mode)
+        except OSError:
+            unplaced += 1
+            continue
+        import_subtitles(raw, final, only=_episode_sub_filter(raw, season, episode))
+    return unplaced
+
+
+def cleanup_duplicate_folders(library_root: Path, *, mode: str = "move") -> int:
+    """Collapse raw release folders into one clean folder per title (R2.3).
+
+    Raw torrent folders left next to their imported `<Title> (<Year>)` twins are
+    verified (media and subtitles imported first) and then deleted, so the
+    library holds a single copy per movie/episode. Returns folders removed.
+    """
+    root = Path(library_root)
+    removed = _cleanup_movie_folders(root / "movies", root, mode=mode)
+    removed += _cleanup_tv_folders(root / "tv-shows", root, mode=mode)
+    return removed
+
+
+def _cleanup_movie_folders(movies: Path, library_root: Path, *, mode: str) -> int:
+    if not movies.is_dir():
+        return 0
+    folders = [
+        p for p in sorted(movies.iterdir()) if p.is_dir() and not p.name.startswith(".")
+    ]
+    clean = [p for p in folders if is_clean_folder_name(p.name)]
+    removed = 0
+    for raw in folders:
+        if is_clean_folder_name(raw.name) or not looks_like_raw_release(raw.name):
+            continue
+        title, year = parse_raw_release_name(raw.name)
+        if not title or title == "Unknown":
+            continue
+        target = _clean_folder_match(title, year, clean)
+        if target is None:
+            final = import_movie(raw, library_root, title, year, mode=mode)
+            if final is None:
+                continue
+            target = final.parent
+            clean.append(target)
+        else:
+            _verify_clean_movie(target, raw, mode=mode)
+        if delete_path(raw):
+            removed += 1
+    return removed
+
+
+def _cleanup_tv_folders(tv: Path, library_root: Path, *, mode: str) -> int:
+    if not tv.is_dir():
+        return 0
+    folders = [
+        p for p in sorted(tv.iterdir()) if p.is_dir() and not p.name.startswith(".")
+    ]
+    shows = [p for p in folders if not looks_like_raw_release(p.name)]
+    removed = 0
+    for raw in folders:
+        if not looks_like_raw_release(raw.name):
+            continue
+        title, year = parse_raw_release_name(raw.name)
+        if not title or title == "Unknown":
+            continue
+        show = _clean_folder_match(title, year, shows)
+        if show is None:
+            show = tv / (f"{sanitize_name(title)} ({year})" if year else sanitize_name(title))
+            show.mkdir(parents=True, exist_ok=True)
+            shows.append(show)
+        unplaced = _import_missing_episodes(raw, show, library_root, mode=mode)
+        if unplaced:
+            continue
+        if delete_path(raw):
+            removed += 1
+    return removed
+
+
 def _find_ffprobe() -> str | None:
     root = Path(__file__).resolve().parents[3]
     for name in ("ffprobe.exe", "ffprobe"):

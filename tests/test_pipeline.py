@@ -16,9 +16,8 @@ def make_cfg(tmp_path, **over):
         DEFAULTS,
         download_root=str(tmp_path / "downloads"),
         library_root=str(tmp_path / "downloads"),
-        import_mode="copy",
-        **over,
     )
+    values.update({"import_mode": "copy", **over})
     return Config(values=values)
 
 
@@ -470,6 +469,136 @@ def test_staging_dir_direct_destination_no_incomplete(tmp_path):
     assert tv_dir.exists()
 
 
+def test_staging_dir_isolated_from_library_roots(tmp_path):
+    """R2.1: raw torrent data stages in downloads/.staging, never in the library."""
+    cfg = make_cfg(tmp_path)
+    movie_dir = pipeline._staging_dir(cfg, "movie")
+    tv_dir = pipeline._staging_dir(cfg, "tv")
+
+    assert movie_dir.parts[-2:] == (".staging", "movies")
+    assert tv_dir.parts[-2:] == (".staging", "tv-shows")
+    assert movie_dir.parent == tv_dir.parent
+    assert (tmp_path / "downloads" / ".staging") == movie_dir.parent
+    # neither staging folder lives inside the browsable library roots
+    assert (tmp_path / "downloads" / "movies") not in movie_dir.parents
+    assert (tmp_path / "downloads" / "tv-shows") not in tv_dir.parents
+
+
+class FakeImportRpc:
+    def __init__(self):
+        self.removed: list[tuple] = []
+
+    async def remove(self, torrent_id, delete_data=False):
+        self.removed.append((torrent_id, delete_data))
+        return {}
+
+    async def list_torrents(self):
+        return []
+
+
+def test_move_import_deletes_raw_release_folder_and_torrent(tmp_path, monkeypatch):
+    """R2.2: a move import leaves exactly one clean folder and drops the torrent."""
+    cfg = make_cfg(tmp_path, import_mode="move")
+    content = tmp_path / "downloads" / ".staging" / "movies" / "Inception.2010.1080p.BluRay"
+    content.mkdir(parents=True)
+    (content / "Inception.2010.1080p.BluRay.mkv").write_bytes(b"\x00" * 2048)
+    (content / "Inception.2010.1080p.BluRay.eng.srt").write_text("subs")
+    (content / "www.YTS.AM.jpg").write_bytes(b"junk")
+    (content / "YIFYStatus.com.txt").write_text("junk")
+
+    db = DB(tmp_path / "arr.db")
+    hash_ = "e" * 40
+    db.add_download(
+        hash_, media_type="movie", title="Inception", year=2010,
+        download_dir=str(content), state="completed",
+    )
+    rec = db.get_download(hash_)
+
+    rpc = FakeImportRpc()
+    monkeypatch.setattr(pipeline, "_rpc", lambda c: rpc)
+    monkeypatch.setattr(pipeline, "ensure_subtitles", lambda *a, **k: None)
+    mirrored: list[tuple] = []
+    monkeypatch.setattr(
+        pipeline, "_mirror_subtitles_to_content", lambda c, f: mirrored.append((c, f))
+    )
+
+    final = pipeline._import_record(rec, cfg, db)
+
+    assert final is not None and final.exists()
+    assert final == tmp_path / "downloads" / "movies" / "Inception (2010)" / "Inception (2010).mkv"
+    assert (final.parent / "Inception (2010).en.srt").exists()
+    # the raw release folder is gone: only the clean folder remains
+    assert not content.exists()
+    assert [p.name for p in (tmp_path / "downloads" / "movies").iterdir()] == ["Inception (2010)"]
+    # the torrent itself is removed with its data
+    assert rpc.removed == [(hash_, True)]
+    # move mode must not copy subtitles back into the raw release folder
+    assert mirrored == []
+    db.close()
+
+
+def test_copy_import_keeps_raw_folder_and_mirrors_nothing(tmp_path, monkeypatch):
+    """Copy/hardlink imports keep the raw folder (seeding) — only move cleans up."""
+    cfg = make_cfg(tmp_path, import_mode="copy")
+    content = tmp_path / "downloads" / ".staging" / "movies" / "Inception.2010.1080p.BluRay"
+    content.mkdir(parents=True)
+    (content / "Inception.2010.1080p.BluRay.mkv").write_bytes(b"\x00" * 2048)
+
+    db = DB(tmp_path / "arr.db")
+    hash_ = "f" * 40
+    db.add_download(
+        hash_, media_type="movie", title="Inception", year=2010,
+        download_dir=str(content), state="completed",
+    )
+    rec = db.get_download(hash_)
+
+    rpc = FakeImportRpc()
+    monkeypatch.setattr(pipeline, "_rpc", lambda c: rpc)
+    monkeypatch.setattr(pipeline, "ensure_subtitles", lambda *a, **k: None)
+
+    final = pipeline._import_record(rec, cfg, db)
+
+    assert final is not None and final.exists()
+    assert content.exists()  # raw folder kept for seeding
+    assert rpc.removed == []
+    db.close()
+
+
+def test_move_import_season_pack_cleans_raw_pack(tmp_path, monkeypatch):
+    """R2.2: season packs move into Season NN and the raw pack folder is deleted."""
+    cfg = make_cfg(tmp_path, import_mode="move")
+    content = tmp_path / "downloads" / ".staging" / "tv-shows" / "Show.S01.1080p.WEB"
+    content.mkdir(parents=True)
+    (content / "Show.S01E01.mkv").write_bytes(b"a" * 512)
+    (content / "Show.S01E02.mkv").write_bytes(b"b" * 512)
+    (content / "poster.jpg").write_bytes(b"junk")
+
+    db = DB(tmp_path / "arr.db")
+    hash_ = "9" * 40
+    db.add_download(
+        hash_, media_type="tv", title="Show", year=2020, tmdb_id=10, season=1,
+        download_dir=str(content), state="completed",
+    )
+    rec = db.get_download(hash_)
+
+    rpc = FakeImportRpc()
+    monkeypatch.setattr(pipeline, "_rpc", lambda c: rpc)
+    monkeypatch.setattr(pipeline, "ensure_subtitles", lambda *a, **k: None)
+
+    final = pipeline._import_record(rec, cfg, db)
+
+    season_dir = tmp_path / "downloads" / "tv-shows" / "Show (2020)" / "Season 01"
+    assert final is not None and season_dir.exists()
+    assert sorted(p.name for p in season_dir.iterdir()) == [
+        "Show - S01E01.mkv",
+        "Show - S01E02.mkv",
+    ]
+    assert not content.exists()
+    assert rpc.removed == [(hash_, True)]
+    assert db.episode_state(10, 1, 1) == "imported"
+    db.close()
+
+
 def test_list_queue_excludes_skipped(tmp_path):
     cfg = make_cfg(tmp_path)
     db = pipeline._db(cfg)
@@ -686,6 +815,45 @@ def test_apply_speed_limits(tmp_path):
 
     asyncio.run(pipeline.apply_speed_limits(RpcMock(), cfg))
     assert limits_applied == {"down": 2500, "up": 500}
+
+
+def test_cleanup_duplicate_folders_via_pipeline_repoints_content_path(tmp_path):
+    """R2.3: the cfg-level cleanup folds duplicates and repoints SQLite at the clean copy."""
+    cfg = make_cfg(tmp_path)
+    raw = tmp_path / "downloads" / "movies" / "Green Book (2018) [BluRay] [1080p] [YTS.AM]"
+    raw.mkdir(parents=True)
+    (raw / "Green.Book.2018.1080p.BluRay.x264-[YTS.AM].mp4").write_bytes(b"x" * 1024)
+    clean = tmp_path / "downloads" / "movies" / "Green Book (2018)"
+    clean.mkdir(parents=True)
+    media = clean / "Green Book (2018).mp4"
+    media.write_bytes(b"x" * 1024)
+
+    db = pipeline._db(cfg)
+    db.add_download("a" * 40, media_type="movie", title="Green Book", year=2018, state="queued")
+    db.set_download_state(
+        "a" * 40, "imported", content_path=str(raw), destination_path=str(media)
+    )
+    db.close()
+
+    removed = pipeline.cleanup_duplicate_folders(cfg)
+
+    assert removed == 1
+    assert not raw.exists()
+    db = pipeline._db(cfg)
+    rec = db.get_download("a" * 40)
+    assert rec["content_path"] == str(media)
+    assert rec["state"] == "imported"
+    db.close()
+
+
+def test_cleanup_duplicate_folders_noop_without_duplicates(tmp_path):
+    cfg = make_cfg(tmp_path)
+    lone = tmp_path / "downloads" / "movies" / "Lone Movie (2019)"
+    lone.mkdir(parents=True)
+    (lone / "Lone Movie (2019).mkv").write_bytes(b"x" * 256)
+
+    assert pipeline.cleanup_duplicate_folders(cfg) == 0
+    assert lone.exists()
 
 
 def test_check_disk_space(tmp_path, monkeypatch):

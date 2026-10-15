@@ -24,6 +24,10 @@ async def get_library(request: Request) -> dict[str, Any]:
 
     logger.info(f"Scanning media library root: {lib_root}")
     try:
+        from arr.pipeline import cleanup_duplicate_folders
+
+        # R2.3: a rescan also collapses leftover raw release folders.
+        await asyncio.to_thread(cleanup_duplicate_folders, cfg)
         raw_movies = await asyncio.to_thread(get_library_movies, movies_dir, cfg)
         raw_shows = await asyncio.to_thread(get_library_shows, tv_dir, cfg)
 

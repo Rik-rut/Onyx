@@ -90,8 +90,13 @@ def _library_root(cfg: Config) -> Path:
 
 
 def _staging_dir(cfg: Config, media_type: str) -> Path:
+    """Where active torrents download.
+
+    R2.1: raw data stages under `downloads/.staging/<movies|tv-shows>` so
+    in-progress releases never pollute the browsable library folders.
+    """
     sub = "movies" if media_type == "movie" else "tv-shows"
-    d = Path(str(cfg.get("download_root", "downloads"))).resolve() / sub
+    d = Path(str(cfg.get("download_root", "downloads"))).resolve() / ".staging" / sub
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -138,6 +143,7 @@ __all__ = [
     "cancel_download",
     "remove_download_and_files",
     "match_torrent",
+    "cleanup_duplicate_folders",
     "pause_download",
     "resume_download",
     "set_download_priority",
@@ -965,7 +971,7 @@ def _resolve_content(rec: dict, cfg: Config | None = None) -> Path | None:
     if not dd:
         return None
     p = Path(str(dd))
-    if p.name in (".incomplete", "movies", "tv-shows"):
+    if p.name in (".incomplete", ".staging", "movies", "tv-shows"):
         title = rec.get("title")
         if title:
             candidate = p / title
@@ -1036,6 +1042,50 @@ def _mirror_subtitles_to_content(content: Path, final_path: Path) -> None:
                 logger.debug(f"Could not mirror subtitle to {dest_sub}: {e}")
 
 
+def _remove_torrent_after_import(cfg: Config, infohash: str) -> None:
+    """Drop the torrent (and its payload) once its media has been moved (R2.2)."""
+    if not infohash:
+        return
+
+    async def _inner() -> None:
+        try:
+            rpc = _rpc(cfg)
+            await rpc.remove(infohash, delete_data=True)
+            logger.info(f"Removed imported torrent {infohash[:12]} from Transmission")
+        except Exception as e:
+            logger.debug(f"Could not remove torrent {infohash[:12]}: {e}")
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    if loop and loop.is_running():
+        loop.create_task(_inner())
+        return
+    try:
+        asyncio.run(_inner())
+    except RuntimeError:
+        pass
+
+
+def _finalize_move_import(rec: dict, cfg: Config, content: Path | None) -> None:
+    """Clean up after a move import: delete the raw release folder (R2.2).
+
+    With `import_mode = "move"` the media and subtitles now live in the clean
+    library folder, so the raw torrent directory (leftover junk, extras) and the
+    torrent itself must disappear to guarantee a single copy on disk.
+    """
+    library = _library_root(cfg)
+    if content is not None:
+        p = Path(content)
+        boundary = prune_boundary(p, library)
+        # Never delete a library/staging root itself — only releases below it.
+        if boundary in p.parents and p.exists():
+            delete_path(p)
+            prune_empty_dirs(p.parent, boundary)
+    _remove_torrent_after_import(cfg, str(rec.get("infohash") or ""))
+
+
 def _import_record(rec: dict, cfg: Config, db: DB, *, overwrite: bool = False) -> Path | None:
     """Import one completed download's content into the library. Idempotent."""
     content = _resolve_content(rec, cfg=cfg)
@@ -1066,7 +1116,11 @@ def _import_record(rec: dict, cfg: Config, db: DB, *, overwrite: bool = False) -
                 tmdb_id=rec.get("tmdb_id"),
                 release_name=rec.get("title") or "",
             )
-            _mirror_subtitles_to_content(content, final)
+            if mode == "move":
+                # R2.2: single-folder storage — no mirroring back into raw data.
+                _finalize_move_import(rec, cfg, content)
+            else:
+                _mirror_subtitles_to_content(content, final)
         return final
 
     # TV: single episode or season pack
@@ -1110,7 +1164,10 @@ def _import_record(rec: dict, cfg: Config, db: DB, *, overwrite: bool = False) -
                 final, cfg=cfg, db=db, imdb_id=series.imdb_id, tmdb_id=series.tmdb_id,
                 season=int(season), episode=int(episode), release_name=rec.get("title") or "",
             )
-            _mirror_subtitles_to_content(primary, final)
+            if mode == "move":
+                _finalize_move_import(rec, cfg, content)
+            else:
+                _mirror_subtitles_to_content(primary, final)
             db.set_download_state(rec["infohash"], "imported", destination_path=str(final))
         return final
 
@@ -1152,10 +1209,11 @@ def _import_season_pack(
                 final, cfg=cfg, db=db, imdb_id=series.imdb_id, tmdb_id=series.tmdb_id,
                 season=season, episode=int(ep), release_name=rec.get("title") or "",
             )
-            _mirror_subtitles_to_content(f, final)
     if imported:
         mark_pack_imported(db, series, season)
         db.set_download_state(rec["infohash"], "imported", destination_path=str(last))
+        if mode == "move":
+            _finalize_move_import(rec, cfg, content)
     return last
 
 
@@ -1523,6 +1581,44 @@ async def download_magnet(
     return final_hash
 
 
+def cleanup_duplicate_folders(cfg: Config, db: DB | None = None) -> int:
+    """Collapse duplicate raw release folders into one clean folder per title (R2.3).
+
+    Runs on server startup, library rescans, and daemon ticks. Returns the number
+    of redundant raw folders removed.
+    """
+    from arr.importer.layout import cleanup_duplicate_folders as _cleanup
+
+    library = _library_root(cfg)
+    try:
+        removed = _cleanup(library, mode=_import_mode(cfg))
+    except Exception as e:
+        logger.warning(f"Duplicate folder cleanup failed: {e}")
+        return 0
+    if removed:
+        logger.info(f"Removed {removed} duplicate raw release folder(s) from {library}")
+
+    own_db = db is None
+    local_db = _db(cfg) if db is None else db
+    try:
+        # Point surviving records at the clean copy when their raw data is gone.
+        for rec in local_db.list_downloads():
+            content = rec.get("content_path")
+            destination = rec.get("destination_path")
+            if not content or not destination:
+                continue
+            if Path(str(content)).exists() or not Path(str(destination)).exists():
+                continue
+            local_db.set_download_state(
+                rec["infohash"], str(rec.get("state") or "imported"),
+                content_path=str(destination),
+            )
+    finally:
+        if own_db:
+            local_db.close()
+    return removed
+
+
 async def import_download(download_id, cfg, overwrite=False):
     db = _db(cfg)
     rec = db.get_download(download_id)
@@ -1637,6 +1733,7 @@ def run_daemon(cfg):
             imported = _poll_and_import(cfg, db)
             if imported:
                 print(f"Imported {imported} download(s).")
+            cleanup_duplicate_folders(cfg, db)
             _apply_seeding_policy(cfg, db)
         finally:
             db.close()

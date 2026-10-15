@@ -269,3 +269,139 @@ def test_prune_boundary_staging_and_tv_roots(tmp_path):
         downloads / "tv-shows"
     )
 
+
+def test_parse_raw_release_folder_names():
+    from arr.importer.layout import parse_raw_release_name
+
+    assert parse_raw_release_name("Green Book (2018) [BluRay] [1080p] [YTS.AM]") == (
+        "Green Book",
+        2018,
+    )
+    assert parse_raw_release_name(
+        "Kung Fu Panda 4 (2024) [1080p] [WEBRip] [x265] [10bit] [5.1] [YTS.MX]"
+    ) == ("Kung Fu Panda 4", 2024)
+    title, year = parse_raw_release_name(
+        "The Apothecary Diaries S02 1080p Dual Audio WEBRip DD+ x265-EMBER"
+    )
+    assert title == "The Apothecary Diaries"
+    assert year is None
+    # already-clean folder names are not raw releases
+    from arr.importer.layout import looks_like_raw_release
+
+    assert looks_like_raw_release("Green Book (2018)") is False
+    assert looks_like_raw_release("Green Book (2018) [BluRay] [1080p] [YTS.AM]") is True
+    assert looks_like_raw_release(
+        "The Apothecary Diaries S02 1080p Dual Audio WEBRip DD+ x265-EMBER"
+    ) is True
+
+
+def test_cleanup_duplicate_folders_deletes_raw_movie_folder(tmp_path):
+    """R2.3: the clean movie folder wins and its raw release twin is removed."""
+    from arr.importer.layout import cleanup_duplicate_folders
+
+    movies = tmp_path / "downloads" / "movies"
+    clean = movies / "Green Book (2018)"
+    clean.mkdir(parents=True)
+    (clean / "Green Book (2018).mp4").write_bytes(b"\x00" * 1024)
+
+    raw = movies / "Green Book (2018) [BluRay] [1080p] [YTS.AM]"
+    raw.mkdir()
+    (raw / "Green.Book.2018.1080p.BluRay.x264-[YTS.AM].mp4").write_bytes(b"\x00" * 1024)
+    (raw / "www.YTS.AM.jpg").write_bytes(b"junk")
+    (raw / "YIFYStatus.com.txt").write_text("junk")
+
+    removed = cleanup_duplicate_folders(tmp_path / "downloads")
+
+    assert removed == 1
+    assert not raw.exists()
+    assert [p.name for p in movies.iterdir()] == ["Green Book (2018)"]
+    assert (clean / "Green Book (2018).mp4").exists()
+
+
+def test_cleanup_duplicate_folders_keeps_subtitles_from_raw(tmp_path):
+    """Subtitles that only exist in the raw folder are preserved in the clean folder."""
+    from arr.importer.layout import cleanup_duplicate_folders
+
+    movies = tmp_path / "downloads" / "movies"
+    clean = movies / "Kung Fu Panda 2 (2011)"
+    clean.mkdir(parents=True)
+    (clean / "Kung Fu Panda 2 (2011).mp4").write_bytes(b"\x00" * 1024)
+
+    raw = movies / "Kung Fu Panda 2 (2011) [1080p] [YTS.AG]"
+    raw.mkdir()
+    (raw / "Kung.Fu.Panda.2.2011.1080p.BluRay.x264-[YTS.AG].mp4").write_bytes(b"\x00" * 1024)
+    (raw / "Kung.Fu.Panda.2.2011.1080p.BluRay.x264-[YTS.AG].en.srt").write_text("subs")
+
+    removed = cleanup_duplicate_folders(tmp_path / "downloads")
+
+    assert removed == 1
+    assert not raw.exists()
+    srt = clean / "Kung Fu Panda 2 (2011).en.srt"
+    assert srt.exists() and srt.read_text() == "subs"
+
+
+def test_cleanup_duplicate_folders_imports_raw_movie_without_clean_folder(tmp_path):
+    """A raw release with no clean counterpart is folded into a single clean folder."""
+    from arr.importer.layout import cleanup_duplicate_folders
+
+    movies = tmp_path / "downloads" / "movies"
+    raw = movies / "Inception.2010.1080p.BluRay.x264-[YTS.AG]"
+    raw.mkdir(parents=True)
+    (raw / "Inception.2010.1080p.BluRay.x264-[YTS.AG].mp4").write_bytes(b"\x00" * 1024)
+    (raw / "Inception.2010.1080p.BluRay.x264-[YTS.AG].en.srt").write_text("subs")
+    (raw / "www.YTS.AG.jpg").write_bytes(b"junk")
+
+    removed = cleanup_duplicate_folders(tmp_path / "downloads")
+
+    assert removed == 1
+    assert not raw.exists()
+    clean = movies / "Inception (2010)"
+    assert (clean / "Inception (2010).mp4").exists()
+    assert (clean / "Inception (2010).en.srt").exists()
+    assert [p.name for p in clean.iterdir()] == ["Inception (2010).en.srt", "Inception (2010).mp4"]
+
+
+def test_cleanup_duplicate_folders_tv_moves_missing_episodes(tmp_path):
+    """R2.3: TV episode files missing from the clean show folder are imported first."""
+    from arr.importer.layout import cleanup_duplicate_folders
+
+    tv = tmp_path / "downloads" / "tv-shows"
+    season = tv / "The Apothecary Diaries (2025)" / "Season 02"
+    season.mkdir(parents=True)
+    (season / "The Apothecary Diaries - S02E01.mkv").write_bytes(b"a" * 256)
+
+    raw = tv / "The Apothecary Diaries S02 1080p Dual Audio WEBRip DD+ x265-EMBER"
+    raw.mkdir()
+    (raw / "S02E01-Maomao and Maomao [F878C427].mkv").write_bytes(b"a" * 256)
+    (raw / "S02E02-Caravan [9141124E].mkv").write_bytes(b"b" * 256)
+    (raw / "readme.txt").write_text("junk")
+
+    removed = cleanup_duplicate_folders(tmp_path / "downloads")
+
+    assert removed == 1
+    assert not raw.exists()
+    names = sorted(p.name for p in season.iterdir())
+    assert names == [
+        "The Apothecary Diaries - S02E01.mkv",
+        "The Apothecary Diaries - S02E02.mkv",
+    ]
+    assert [p.name for p in tv.iterdir()] == ["The Apothecary Diaries (2025)"]
+
+
+def test_cleanup_duplicate_folders_leaves_single_folders_alone(tmp_path):
+    """Folders with no duplicate pair and non-release folders are untouched."""
+    from arr.importer.layout import cleanup_duplicate_folders
+
+    movies = tmp_path / "downloads" / "movies"
+    lone = movies / "Lone Movie (2019)"
+    lone.mkdir(parents=True)
+    (lone / "Lone Movie (2019).mkv").write_bytes(b"\x00" * 512)
+    extras = movies / "Trailers and Extras"
+    extras.mkdir()
+    (extras / "clip.mkv").write_bytes(b"\x00" * 512)
+
+    removed = cleanup_duplicate_folders(tmp_path / "downloads")
+
+    assert removed == 0
+    assert lone.exists() and extras.exists()
+
