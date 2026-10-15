@@ -99,7 +99,7 @@ async def lifespan(app: FastAPI):
 
 def create_app(cfg: Config) -> FastAPI:
     """Create and configure the FastAPI web application instance."""
-    app = FastAPI(title="ARR Web Dashboard", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="Onyx Web Dashboard", version="0.1.0", lifespan=lifespan)
     app.state.cfg = cfg
 
     @app.middleware("http")

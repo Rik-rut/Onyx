@@ -118,7 +118,7 @@ def web_cmd(
 
     typer.echo("")
     typer.echo("=" * 60)
-    typer.echo("               ARR Web UI Dashboard Running")
+    typer.echo("               ONYX Web UI Dashboard Running")
     typer.echo(f"  URL: {url}")
     typer.echo("=" * 60)
     typer.echo("  [C] Launch Interactive CLI Dashboard")
@@ -180,7 +180,7 @@ def web_cmd(
                     pass
                 typer.echo("")
                 typer.echo("=" * 60)
-                typer.echo("               ARR Web UI Dashboard Running")
+                typer.echo("               ONYX Web UI Dashboard Running")
                 typer.echo(f"  URL: {url}")
                 typer.echo("=" * 60)
                 typer.echo("  [C] Launch Interactive CLI Dashboard")

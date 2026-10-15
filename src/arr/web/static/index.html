@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ARR â€” Shows & Movies Downloader</title>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>ðŸŽ¬</text></svg>">
+  <title>Onyx — Media Discovery & Downloader</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎬</text></svg>">
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
   <script>
@@ -13,9 +13,9 @@
       theme: {
         extend: {
           colors: {
-            brand: { 500: '#3b82f6', 600: '#2563eb', 700: '#1d4ed8' },
-            darkbg: '#0f172a',
-            darkcard: '#1e293b',
+            brand: { 500: '#6366f1', 600: '#4f46e5', 700: '#4338ca' },
+            darkbg: '#090d16',
+            darkcard: '#111827',
           }
         }
       }
@@ -24,10 +24,12 @@
   <style>
     [v-cloak] { display: none; }
     ::-webkit-scrollbar { width: 8px; height: 8px; }
-    ::-webkit-scrollbar-track { background: #0f172a; }
-    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
-    ::-webkit-scrollbar-thumb:hover { background: #475569; }
-    :focus-visible { outline: 2px solid #3b82f6; outline-offset: 2px; }
+    ::-webkit-scrollbar-track { background: #090d16; }
+    ::-webkit-scrollbar-thumb { background: #27314b; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #3b4767; }
+    :focus-visible { outline: 2px solid #6366f1; outline-offset: 2px; }
+    .no-scrollbar::-webkit-scrollbar { display: none; }
+    .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after {
         animation-duration: 0.001ms !important;
@@ -38,20 +40,16 @@
     }
   </style>
 </head>
-<body class="bg-darkbg text-slate-100 min-h-screen font-sans antialiased selection:bg-blue-600 selection:text-white">
+<body class="bg-darkbg text-slate-100 min-h-screen font-sans antialiased selection:bg-indigo-600 selection:text-white">
   <div id="app" v-cloak class="min-h-screen flex flex-col">
     <!-- Top Header -->
     <header class="bg-darkcard border-b border-slate-800 sticky top-0 z-40">
       <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-between h-16">
-        <!-- Logo Branding -->
+        <!-- Onyx wordmark branding (R5.1) -->
         <div class="flex items-center space-x-3">
-          <div class="w-9 h-9 rounded-lg bg-blue-600 flex items-center justify-center font-black text-xl text-white shadow-lg shadow-blue-500/30">
-            A
-          </div>
-          <div>
-            <h1 class="font-bold text-lg leading-tight tracking-wide text-white">ARR</h1>
-            <p class="text-xs text-slate-400 hidden sm:block">Shows & Movies Downloader</p>
-          </div>
+          <span class="font-black text-2xl sm:text-[26px] leading-none tracking-[0.35em] bg-gradient-to-r from-white via-slate-300 to-indigo-400 bg-clip-text text-transparent select-none">ONYX</span>
+          <span class="hidden lg:inline-block h-5 w-px bg-slate-700" aria-hidden="true"></span>
+          <p class="text-xs text-slate-500 hidden lg:block tracking-wide">Media Discovery &amp; Downloader</p>
         </div>
 
         <!-- Desktop Navigation Bar -->
@@ -131,7 +129,7 @@
       <!-- Backend unreachable banner -->
       <div v-if="backendDown" role="alert" class="mb-4 flex items-center gap-2 rounded-lg border border-amber-700 bg-amber-900/60 px-4 py-3 text-xs sm:text-sm text-amber-100">
         <span class="w-2 h-2 rounded-full bg-amber-400 shrink-0" aria-hidden="true"></span>
-        <span>Canâ€™t reach the ARR backend or Transmission. Some data may be stale. Retrying automatically.</span>
+        <span>Can’t reach the Onyx backend or Transmission. Some data may be stale. Retrying automatically.</span>
       </div>
 
       <!-- TAB 1: SEARCH & DISCOVER -->
@@ -155,11 +153,186 @@
                      class="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition">
             </div>
 
-            <button @click="performSearch" :disabled="searching" class="bg-blue-600 hover:bg-blue-700 text-white font-medium px-5 py-2.5 rounded-lg flex items-center justify-center space-x-2 transition disabled:opacity-50">
+            <button @click="performSearch" :disabled="searching" class="bg-indigo-600 hover:bg-indigo-500 text-white font-medium px-5 py-2.5 rounded-lg flex items-center justify-center space-x-2 transition disabled:opacity-50">
               <span v-if="searching" aria-hidden="true" class="animate-spin w-4 h-4 border-2 border-white border-t-transparent rounded-full"></span>
-              <span>{{ searching ? 'Searchingâ€¦' : 'Search' }}</span>
+              <span>{{ searching ? 'Searching…' : 'Search' }}</span>
+            </button>
+
+            <button v-if="searched" @click="backToDiscover" class="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-medium px-4 py-2.5 rounded-lg transition whitespace-nowrap">
+              ← Discover
             </button>
           </div>
+        </div>
+
+        <!-- DISCOVER VIEW (R4.3): hero spotlight, genre chips and poster rails -->
+        <div v-if="!searched" class="space-y-8" data-testid="discover-view">
+          <div v-if="loadingDiscover" class="space-y-6" aria-hidden="true">
+            <div class="h-56 sm:h-72 rounded-2xl bg-darkcard border border-slate-800 animate-pulse"></div>
+            <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3">
+              <div v-for="n in 5" :key="n" class="aspect-[2/3] rounded-xl bg-darkcard border border-slate-800 animate-pulse"></div>
+            </div>
+          </div>
+
+          <div v-else-if="discoverError" class="text-center py-16 text-sm" role="alert">
+            <p class="text-rose-400 font-medium">{{ discoverError }}</p>
+            <button @click="loadDiscover" class="mt-3 text-xs font-semibold text-indigo-400 hover:text-indigo-300 underline underline-offset-2">Try again</button>
+          </div>
+
+          <template v-else>
+            <!-- Hero Spotlight Banner -->
+            <div v-if="discover.spotlight" class="relative overflow-hidden rounded-2xl border border-slate-800 bg-darkcard">
+              <img v-if="discover.spotlight.poster" :src="discover.spotlight.poster" :alt="`Artwork for ${discover.spotlight.title}`"
+                   class="absolute inset-0 w-full h-full object-cover opacity-25 blur-sm scale-110" aria-hidden="true">
+              <div class="absolute inset-0 bg-gradient-to-r from-darkbg via-darkbg/90 to-darkbg/40" aria-hidden="true"></div>
+              <div class="relative flex flex-col sm:flex-row gap-5 p-5 sm:p-8">
+                <img v-if="discover.spotlight.poster" :src="discover.spotlight.poster" :alt="`Poster for ${discover.spotlight.title}`"
+                     class="hidden sm:block w-36 lg:w-44 rounded-xl shadow-2xl border border-slate-700/60 object-cover aspect-[2/3]">
+                <div class="flex-1 min-w-0">
+                  <div class="flex flex-wrap items-center gap-2">
+                    <span class="text-[10px] font-bold tracking-[0.2em] uppercase px-2 py-0.5 rounded bg-indigo-600 text-white">
+                      {{ spotlightTypeLabel }}
+                    </span>
+                    <span v-if="discover.spotlight.rating" class="text-[11px] font-semibold px-2 py-0.5 rounded bg-amber-500/15 text-amber-300">
+                      ★ {{ discover.spotlight.rating }}
+                    </span>
+                    <span v-if="discover.spotlight.year" class="text-[11px] font-mono text-slate-300">{{ discover.spotlight.year }}</span>
+                    <span v-if="discover.spotlight.genres && discover.spotlight.genres.length" class="text-[11px] text-slate-400">
+                      {{ discover.spotlight.genres.slice(0, 3).join(' • ') }}
+                    </span>
+                    <span v-if="discover.spotlight.library_status" :class="libraryBadgeClass(discover.spotlight.library_status)"
+                          class="text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded">
+                      {{ libraryBadgeLabel(discover.spotlight.library_status) }}
+                    </span>
+                  </div>
+                  <h2 class="mt-3 font-black text-2xl sm:text-3xl lg:text-4xl text-white leading-tight">{{ discover.spotlight.title }}</h2>
+                  <p v-if="discover.spotlight.overview" class="mt-3 text-xs sm:text-sm text-slate-300 max-w-2xl line-clamp-3">{{ discover.spotlight.overview }}</p>
+                  <p v-else class="mt-3 text-xs sm:text-sm text-slate-500 italic">Trending on IMDb right now.</p>
+                  <div class="mt-5 flex flex-wrap items-center gap-2">
+                    <button @click="openDiscoverItem(discover.spotlight)"
+                            class="bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold px-5 py-2.5 rounded-lg transition flex items-center gap-2">
+                      <span>View &amp; Download</span>
+                      <svg aria-hidden="true" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Browse by Genre Chips -->
+            <div>
+              <div class="flex items-center justify-between mb-3">
+                <h2 class="font-bold text-sm sm:text-base text-white">Browse by Genre</h2>
+                <div class="inline-flex rounded-lg border border-slate-700 p-0.5 bg-slate-900" role="group" aria-label="Genre media type">
+                  <button @click="genreType = 'movie'; genreFilter && loadGenre(genreFilter)" :aria-pressed="genreType === 'movie'"
+                          :class="genreType === 'movie' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'"
+                          class="px-2.5 py-1 rounded-md text-[11px] font-semibold transition">Movies</button>
+                  <button @click="genreType = 'tv'; genreFilter && loadGenre(genreFilter)" :aria-pressed="genreType === 'tv'"
+                          :class="genreType === 'tv' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'"
+                          class="px-2.5 py-1 rounded-md text-[11px] font-semibold transition">TV</button>
+                </div>
+              </div>
+              <div class="flex flex-wrap gap-2" role="group" aria-label="Genres">
+                <button v-for="g in discover.genres" :key="g" @click="loadGenre(g)" :aria-pressed="genreFilter === g"
+                        :class="genreFilter === g ? 'bg-indigo-600 text-white border-indigo-500' : 'bg-slate-900/70 text-slate-300 hover:text-white border-slate-700'"
+                        class="px-3 py-1.5 rounded-full border text-xs font-medium transition">
+                  {{ g }}
+                </button>
+                <button v-if="genreFilter" @click="clearGenre" class="px-3 py-1.5 rounded-full border border-slate-700 text-xs font-medium text-slate-400 hover:text-white transition">
+                  Clear
+                </button>
+              </div>
+
+              <div v-if="loadingGenre" class="mt-4 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3" aria-hidden="true">
+                <div v-for="n in 5" :key="n" class="aspect-[2/3] rounded-xl bg-darkcard border border-slate-800 animate-pulse"></div>
+              </div>
+              <div v-else-if="genreFilter && genreItems.length" class="mt-4">
+                <h3 class="text-xs font-semibold text-slate-400 mb-2">{{ genreType === 'movie' ? 'Movies' : 'TV Shows' }} · {{ genreFilter }}</h3>
+                <div class="flex gap-3 overflow-x-auto no-scrollbar pb-2">
+                  <article v-for="item in genreItems" :key="item.imdb_id || item.id" class="w-32 sm:w-36 shrink-0 group">
+                    <button @click="openDiscoverItem(item)" class="block w-full text-left">
+                      <div class="aspect-[2/3] rounded-xl overflow-hidden bg-slate-800 border border-slate-800 group-hover:border-indigo-500 transition relative">
+                        <img v-if="item.poster" :src="item.poster" :alt="`Poster for ${item.title}`" @error="item.poster = ''" class="w-full h-full object-cover group-hover:scale-105 transition duration-300">
+                        <div v-else class="w-full h-full flex items-center justify-center text-slate-600 font-bold text-[10px] p-3 text-center">{{ item.title }}</div>
+                        <span v-if="item.library_status" :class="libraryBadgeClass(item.library_status)"
+                              class="absolute top-1.5 left-1.5 text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded">
+                          {{ libraryBadgeLabel(item.library_status) }}
+                        </span>
+                      </div>
+                      <h4 class="mt-1.5 text-[11px] font-semibold text-slate-200 line-clamp-1 group-hover:text-indigo-300 transition">{{ item.title }}</h4>
+                      <p class="text-[10px] text-slate-500 font-mono">{{ item.year || '' }}<span v-if="item.rating"> · ★ {{ item.rating }}</span></p>
+                    </button>
+                  </article>
+                </div>
+              </div>
+              <div v-else-if="genreFilter" class="mt-4 text-xs text-slate-500">No titles found in that genre right now.</div>
+            </div>
+
+            <!-- Trending Movies Rail -->
+            <div v-if="discover.trending_movies.length">
+              <h2 class="font-bold text-sm sm:text-base text-white mb-3">Trending Movies</h2>
+              <div class="flex gap-3 overflow-x-auto no-scrollbar pb-2">
+                <article v-for="item in discover.trending_movies" :key="item.imdb_id" class="w-32 sm:w-36 shrink-0 group">
+                  <button @click="openDiscoverItem(item)" class="block w-full text-left">
+                    <div class="aspect-[2/3] rounded-xl overflow-hidden bg-slate-800 border border-slate-800 group-hover:border-indigo-500 transition relative">
+                      <img v-if="item.poster" :src="item.poster" :alt="`Poster for ${item.title}`" @error="item.poster = ''" class="w-full h-full object-cover group-hover:scale-105 transition duration-300">
+                      <div v-else class="w-full h-full flex items-center justify-center text-slate-600 font-bold text-[10px] p-3 text-center">{{ item.title }}</div>
+                      <span v-if="item.rating" class="absolute top-1.5 right-1.5 text-[9px] font-bold px-1.5 py-0.5 rounded bg-black/75 text-amber-300">★ {{ item.rating }}</span>
+                      <span v-if="item.library_status" :class="libraryBadgeClass(item.library_status)"
+                            class="absolute bottom-1.5 left-1.5 text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded">
+                        {{ libraryBadgeLabel(item.library_status) }}
+                      </span>
+                    </div>
+                    <h4 class="mt-1.5 text-[11px] font-semibold text-slate-200 line-clamp-1 group-hover:text-indigo-300 transition">{{ item.title }}</h4>
+                    <p class="text-[10px] text-slate-500 font-mono">{{ item.year || '' }}</p>
+                  </button>
+                </article>
+              </div>
+            </div>
+
+            <!-- Trending TV Rail -->
+            <div v-if="discover.trending_tv.length">
+              <h2 class="font-bold text-sm sm:text-base text-white mb-3">Trending TV Shows</h2>
+              <div class="flex gap-3 overflow-x-auto no-scrollbar pb-2">
+                <article v-for="item in discover.trending_tv" :key="item.id" class="w-32 sm:w-36 shrink-0 group">
+                  <button @click="openDiscoverItem(item)" class="block w-full text-left">
+                    <div class="aspect-[2/3] rounded-xl overflow-hidden bg-slate-800 border border-slate-800 group-hover:border-indigo-500 transition relative">
+                      <img v-if="item.poster" :src="item.poster" :alt="`Poster for ${item.title}`" @error="item.poster = ''" class="w-full h-full object-cover group-hover:scale-105 transition duration-300">
+                      <div v-else class="w-full h-full flex items-center justify-center text-slate-600 font-bold text-[10px] p-3 text-center">{{ item.title }}</div>
+                      <span v-if="item.rating" class="absolute top-1.5 right-1.5 text-[9px] font-bold px-1.5 py-0.5 rounded bg-black/75 text-amber-300">★ {{ item.rating }}</span>
+                      <span v-if="item.library_status" :class="libraryBadgeClass(item.library_status)"
+                            class="absolute bottom-1.5 left-1.5 text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded">
+                        {{ libraryBadgeLabel(item.library_status) }}
+                      </span>
+                    </div>
+                    <h4 class="mt-1.5 text-[11px] font-semibold text-slate-200 line-clamp-1 group-hover:text-indigo-300 transition">{{ item.title }}</h4>
+                    <p class="text-[10px] text-slate-500 font-mono">{{ item.year || '' }}</p>
+                  </button>
+                </article>
+              </div>
+            </div>
+
+            <!-- Top Rated Rail -->
+            <div v-if="discover.top_rated_movies.length">
+              <h2 class="font-bold text-sm sm:text-base text-white mb-3">Top Rated Movies</h2>
+              <div class="flex gap-3 overflow-x-auto no-scrollbar pb-2">
+                <article v-for="item in discover.top_rated_movies" :key="item.imdb_id" class="w-32 sm:w-36 shrink-0 group">
+                  <button @click="openDiscoverItem(item)" class="block w-full text-left">
+                    <div class="aspect-[2/3] rounded-xl overflow-hidden bg-slate-800 border border-slate-800 group-hover:border-indigo-500 transition relative">
+                      <img v-if="item.poster" :src="item.poster" :alt="`Poster for ${item.title}`" @error="item.poster = ''" class="w-full h-full object-cover group-hover:scale-105 transition duration-300">
+                      <div v-else class="w-full h-full flex items-center justify-center text-slate-600 font-bold text-[10px] p-3 text-center">{{ item.title }}</div>
+                      <span v-if="item.rating" class="absolute top-1.5 right-1.5 text-[9px] font-bold px-1.5 py-0.5 rounded bg-black/75 text-amber-300">★ {{ item.rating }}</span>
+                      <span v-if="item.library_status" :class="libraryBadgeClass(item.library_status)"
+                            class="absolute bottom-1.5 left-1.5 text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded">
+                        {{ libraryBadgeLabel(item.library_status) }}
+                      </span>
+                    </div>
+                    <h4 class="mt-1.5 text-[11px] font-semibold text-slate-200 line-clamp-1 group-hover:text-indigo-300 transition">{{ item.title }}</h4>
+                    <p class="text-[10px] text-slate-500 font-mono">{{ item.year || '' }}</p>
+                  </button>
+                </article>
+              </div>
+            </div>
+          </template>
         </div>
 
         <!-- Search Loading Skeletons -->
@@ -177,11 +350,11 @@
         <!-- Search Error State -->
         <div v-else-if="searchError" class="text-center py-16 text-sm" role="alert">
           <p class="text-rose-400 font-medium">{{ searchError }}</p>
-          <button @click="performSearch" class="mt-3 text-xs font-semibold text-blue-400 hover:text-blue-300 underline underline-offset-2">Try again</button>
+          <button @click="performSearch" class="mt-3 text-xs font-semibold text-indigo-400 hover:text-indigo-300 underline underline-offset-2">Try again</button>
         </div>
 
         <!-- Search Results Grid -->
-        <div v-else-if="searchResults.length" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 sm:gap-4">
+        <div v-else-if="searched && searchResults.length" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 sm:gap-4">
           <div v-for="item in searchResults" :key="item.id"
                class="bg-darkcard border border-slate-800 rounded-xl overflow-hidden hover:border-slate-600 transition flex flex-col group">
             <div class="aspect-[2/3] bg-slate-800 relative overflow-hidden">
@@ -192,17 +365,21 @@
               <div v-if="item.year" class="absolute top-2 right-2 px-2 py-0.5 rounded bg-black/70 backdrop-blur text-xs font-semibold text-white">
                 {{ item.year }}
               </div>
+              <span v-if="item.library_status" :class="libraryBadgeClass(item.library_status)"
+                    class="absolute bottom-2 left-2 text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded">
+                {{ libraryBadgeLabel(item.library_status) }}
+              </span>
             </div>
 
             <div class="p-3 sm:p-3.5 flex-1 flex flex-col justify-between">
               <div>
-                <h3 class="font-bold text-xs sm:text-sm text-white line-clamp-1 group-hover:text-blue-400 transition">{{ item.title }}</h3>
+                <h3 class="font-bold text-xs sm:text-sm text-white line-clamp-1 group-hover:text-indigo-300 transition">{{ item.title }}</h3>
                 <p v-if="item.stars" class="text-xs text-slate-400 line-clamp-1 mt-0.5">{{ item.stars }}</p>
                 <p v-if="item.genres && item.genres.length" class="text-xs text-slate-500 mt-0.5">{{ item.genres.join(', ') }}</p>
               </div>
 
               <div class="mt-3 pt-2 border-t border-slate-800/80 flex items-center justify-between">
-                <button @click="openReleaseModal(item)" :aria-label="`Find releases for ${item.title}`" class="w-full bg-blue-600/20 hover:bg-blue-600 text-blue-400 hover:text-white text-xs font-semibold py-1.5 px-3 rounded transition flex items-center justify-center space-x-1">
+                <button @click="openReleaseModal(item)" :aria-label="`Find releases for ${item.title}`" class="w-full bg-indigo-600/20 hover:bg-indigo-600 text-indigo-300 hover:text-white text-xs font-semibold py-1.5 px-3 rounded transition flex items-center justify-center space-x-1">
                   <span>Releases</span>
                   <svg aria-hidden="true" class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
                 </button>
@@ -212,7 +389,7 @@
         </div>
 
         <div v-else-if="searched && !searching" class="text-center py-16 text-slate-500 text-sm">
-          No media found matching â€œ{{ searchQuery }}â€. Check the spelling or try a different title.
+          No media found matching “{{ searchQuery }}”. Check the spelling or try a different title.
         </div>
       </section>
 
@@ -532,23 +709,69 @@
            class="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-2 sm:p-4">
         <div ref="modalDialog" role="dialog" aria-modal="true" aria-labelledby="modalTitle" tabindex="-1"
              class="bg-darkcard border border-slate-800 rounded-2xl max-w-4xl w-full max-h-[92vh] flex flex-col shadow-2xl overflow-hidden outline-none">
-          <!-- Modal Header -->
-          <div class="p-4 sm:p-5 border-b border-slate-800 flex items-start justify-between">
-            <div class="flex items-center space-x-3 sm:space-x-4">
-              <img v-if="selectedItem.poster" :src="selectedItem.poster" :alt="`Poster for ${selectedItem.title}`" @error="selectedItem.poster = ''" class="w-10 h-14 sm:w-12 sm:h-16 object-cover rounded bg-slate-800">
-              <div>
-                <h3 id="modalTitle" class="font-bold text-base sm:text-lg text-white">
-                  {{ selectedItem.title }}
-                  <span v-if="selectedItem.year" class="text-slate-400 font-normal">({{ selectedItem.year }})</span>
-                </h3>
-                <p class="text-xs text-slate-400 mt-0.5">{{ selectedItem.genres ? selectedItem.genres.join(', ') : (searchType === 'movie' ? 'Movie' : 'TV Show') }}</p>
+          <!-- Modal Header (rich metadata, R4.3) -->
+          <div class="relative border-b border-slate-800">
+            <img v-if="selectedItem.poster" :src="selectedItem.poster" alt="" aria-hidden="true"
+                 class="absolute inset-0 w-full h-full object-cover opacity-20 blur-md scale-110">
+            <div class="absolute inset-0 bg-gradient-to-r from-darkcard via-darkcard/95 to-darkcard/70" aria-hidden="true"></div>
+            <div class="relative p-4 sm:p-5 flex items-start justify-between gap-3">
+              <div class="flex items-start space-x-3 sm:space-x-4 min-w-0">
+                <img v-if="selectedItem.poster" :src="selectedItem.poster" :alt="`Poster for ${selectedItem.title}`" @error="selectedItem.poster = ''" class="w-14 h-20 sm:w-16 sm:h-24 object-cover rounded-lg bg-slate-800 border border-slate-700/60 shadow-lg">
+                <div class="min-w-0">
+                  <h3 id="modalTitle" class="font-bold text-base sm:text-lg text-white">
+                    {{ selectedItem.title }}
+                    <span v-if="selectedItem.year" class="text-slate-400 font-normal">({{ selectedItem.year }})</span>
+                  </h3>
+                  <div class="flex flex-wrap items-center gap-2 mt-1.5">
+                    <span v-if="detailRating" class="text-[11px] font-semibold px-2 py-0.5 rounded bg-amber-500/15 text-amber-300">★ {{ detailRating }}</span>
+                    <span v-if="detailRuntime" class="text-[11px] text-slate-400 font-mono">{{ detailRuntime }} min</span>
+                    <span v-if="detailNetwork" class="text-[11px] text-slate-400">{{ detailNetwork }}</span>
+                    <span v-if="detailGenres.length" class="text-[11px] text-slate-400">{{ detailGenres.join(' • ') }}</span>
+                    <span v-if="modalLibraryStatus" :class="libraryBadgeClass(modalLibraryStatus)"
+                          class="text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded">
+                      {{ libraryBadgeLabel(modalLibraryStatus) }}
+                    </span>
+                    <span v-else-if="selectedItem.media_type === 'tv' ? true : (searchType === 'movie')" class="text-[11px] text-slate-500">
+                      {{ modalType === 'movie' ? 'Movie' : 'TV Show' }}
+                    </span>
+                  </div>
+                  <p v-if="detailStars.length" class="text-[11px] text-slate-400 mt-1 line-clamp-1">Starring {{ detailStars.join(', ') }}</p>
+                </div>
               </div>
+              <button @click="closeModal" aria-label="Close dialog" class="text-slate-400 hover:text-white text-2xl font-bold leading-none">&times;</button>
             </div>
-            <button @click="closeModal" aria-label="Close dialog" class="text-slate-400 hover:text-white text-2xl font-bold leading-none">&times;</button>
+            <p v-if="detailOverview" class="relative px-4 sm:px-5 pb-4 -mt-1 text-xs text-slate-300 line-clamp-4">{{ detailOverview }}</p>
+            <p v-else-if="loadingDetailInfo" class="relative px-4 sm:px-5 pb-4 -mt-1 text-xs text-slate-500">Loading synopsis…</p>
+          </div>
+
+          <!-- Similar Titles / More Like This (R4.3) -->
+          <div v-if="similarTitles.length" class="border-b border-slate-800 bg-slate-900/40 p-3">
+            <h4 class="text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-2">More Like This</h4>
+            <div class="flex gap-2.5 overflow-x-auto no-scrollbar pb-1">
+              <button v-for="sim in similarTitles" :key="sim.imdb_id || sim.id" @click="openSimilar(sim)"
+                      class="w-24 shrink-0 text-left group">
+                <div class="aspect-[2/3] rounded-lg overflow-hidden bg-slate-800 border border-slate-800 group-hover:border-indigo-500 transition relative">
+                  <img v-if="sim.poster" :src="sim.poster" :alt="`Poster for ${sim.title}`" @error="sim.poster = ''" class="w-full h-full object-cover">
+                  <div v-else class="w-full h-full flex items-center justify-center text-slate-600 text-[9px] font-semibold p-2 text-center">{{ sim.title }}</div>
+                  <span v-if="sim.library_status" :class="libraryBadgeClass(sim.library_status)"
+                        class="absolute bottom-1 left-1 text-[8px] font-bold uppercase px-1 py-0.5 rounded">
+                    {{ libraryBadgeLabel(sim.library_status) }}
+                  </span>
+                </div>
+                <p class="mt-1 text-[10px] font-semibold text-slate-300 line-clamp-1 group-hover:text-indigo-300">{{ sim.title }}</p>
+                <p class="text-[9px] text-slate-500 font-mono">{{ sim.year || '' }}</p>
+              </button>
+            </div>
+          </div>
+
+          <!-- In-library notice (R3.2) -->
+          <div v-if="modalInLibrary" class="px-4 sm:px-5 py-2 bg-emerald-950/40 border-b border-emerald-900/60 text-[11px] text-emerald-300 flex items-center gap-2">
+            <span aria-hidden="true">✓</span>
+            <span>Already in your library{{ selectedItem.media_type === 'tv' ? ' (some or all episodes)' : '' }} — downloading again will be confirmed first.</span>
           </div>
 
           <!-- Rich TV Episode Browser (R22.2) -->
-          <div v-if="searchType === 'tv'" class="bg-slate-900/60 border-b border-slate-800">
+          <div v-if="modalType === 'tv'" class="bg-slate-900/60 border-b border-slate-800">
             <!-- Loading indicator for TV show metadata -->
             <div v-if="loadingTvDetails" class="p-4 text-center text-xs text-slate-400 flex items-center justify-center space-x-2" role="status">
               <span aria-hidden="true" class="animate-spin w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full"></span>
@@ -592,14 +815,15 @@
                 <div v-for="ep in currentSeasonObj.episodes" :key="ep.episode_number"
                      class="p-2 sm:p-2.5 flex items-center justify-between hover:bg-slate-800/40 transition">
                   <div class="flex items-center space-x-2 truncate pr-2">
-                    <span class="font-mono text-blue-400 font-bold">E{{ String(ep.episode_number).padStart(2, '0') }}</span>
+                    <span class="font-mono text-indigo-400 font-bold">E{{ String(ep.episode_number).padStart(2, '0') }}</span>
                     <span class="text-slate-200 truncate font-medium">{{ ep.name || ('Episode ' + ep.episode_number) }}</span>
+                    <span v-if="ep.available" class="text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 shrink-0">Available</span>
                     <span v-if="ep.air_date" class="text-slate-500 text-[11px] font-mono hidden sm:inline">({{ ep.air_date }})</span>
                   </div>
                   <button @click="searchEpisode(ep.episode_number)"
                           :aria-pressed="tvScope === 'episode' && selectedEpisode === ep.episode_number"
                           :aria-label="`Find releases for episode ${ep.episode_number}`"
-                          :class="(tvScope === 'episode' && selectedEpisode === ep.episode_number) ? 'bg-blue-600 text-white' : 'bg-blue-600/20 text-blue-400 hover:bg-blue-600 hover:text-white'"
+                          :class="(tvScope === 'episode' && selectedEpisode === ep.episode_number) ? 'bg-indigo-600 text-white' : 'bg-indigo-600/20 text-indigo-300 hover:bg-indigo-600 hover:text-white'"
                           class="px-2.5 py-0.5 rounded text-xs font-semibold whitespace-nowrap transition">
                     {{ (tvScope === 'episode' && selectedEpisode === ep.episode_number) ? 'Selected' : 'Releases' }}
                   </button>
@@ -711,6 +935,20 @@
         const searchResults = ref([]);
         const searchError = ref('');
 
+        // Discover homepage state (R4.3)
+        const discover = ref({ spotlight: null, trending_movies: [], trending_tv: [], top_rated_movies: [], genres: [] });
+        const loadingDiscover = ref(false);
+        const discoverError = ref('');
+        const genreFilter = ref('');
+        const genreType = ref('movie');
+        const genreItems = ref([]);
+        const loadingGenre = ref(false);
+        // Detail modal enrichment (R4.2/R4.3)
+        const modalType = ref('movie');
+        const detailInfo = ref(null);
+        const similarTitles = ref([]);
+        const loadingDetailInfo = ref(false);
+
         // Modal & Releases state
         const selectedItem = ref(null);
         const loadingReleases = ref(false);
@@ -795,7 +1033,9 @@
           try { body = await res.json(); } catch (e) { body = null; }
           if (!res.ok) {
             const detail = body && (body.detail || body.message);
-            throw new Error(detail || `Request failed (${res.status})`);
+            const err = new Error(detail || `Request failed (${res.status})`);
+            err.status = res.status;
+            throw err;
           }
           return body;
         }
@@ -917,6 +1157,64 @@
           return monitoredIds.value.includes(String(selectedItem.value.id));
         });
 
+        // ------------------- Modal detail enrichment (R4.3) -------------------
+
+        const detailOverview = computed(() => {
+          const info = detailInfo.value || {};
+          const tv = tvDetails.value || {};
+          return info.overview || tv.overview || '';
+        });
+
+        const detailRating = computed(() => {
+          const info = detailInfo.value || {};
+          const tv = tvDetails.value || {};
+          return info.rating || tv.rating || (selectedItem.value && selectedItem.value.rating) || null;
+        });
+
+        const detailRuntime = computed(() => (detailInfo.value && detailInfo.value.runtime) || null);
+
+        const detailGenres = computed(() => {
+          const info = detailInfo.value || {};
+          const tv = tvDetails.value || {};
+          if (info.genres && info.genres.length) return info.genres;
+          if (tv.genres && tv.genres.length) return tv.genres;
+          return (selectedItem.value && selectedItem.value.genres) || [];
+        });
+
+        const detailStars = computed(() => {
+          const info = detailInfo.value || {};
+          if (info.stars && info.stars.length) return info.stars;
+          const stars = selectedItem.value && selectedItem.value.stars;
+          if (typeof stars === 'string' && stars.trim()) {
+            return stars.split(',').map(s => s.trim()).filter(Boolean);
+          }
+          return [];
+        });
+
+        const detailNetwork = computed(() => {
+          const tv = tvDetails.value || {};
+          const info = detailInfo.value || {};
+          return tv.network || info.network || (selectedItem.value && selectedItem.value.network) || '';
+        });
+
+        const modalLibraryStatus = computed(() => {
+          const info = detailInfo.value || {};
+          const tv = tvDetails.value || {};
+          return tv.library_status || info.library_status || (selectedItem.value && selectedItem.value.library_status) || null;
+        });
+
+        const modalInLibrary = computed(() => {
+          const info = detailInfo.value || {};
+          const tv = tvDetails.value || {};
+          return Boolean(tv.in_library || info.in_library || (selectedItem.value && selectedItem.value.in_library));
+        });
+
+        const spotlightTypeLabel = computed(() => {
+          const item = discover.value.spotlight || {};
+          const isTv = item.media_type === 'tv' || item.title === (item.name || null);
+          return isTv && item.media_type === 'tv' ? 'TV Show' : 'Movie';
+        });
+
         // Computed filtered & sorted candidate releases (R22.3)
         const filteredReleases = computed(() => {
           let list = [...releases.value];
@@ -959,24 +1257,123 @@
           }
         }
 
+        // ------------------- Discover (R4.3) -------------------
+
+        function libraryBadgeLabel(status) {
+          const map = { available: 'Available', partial: 'Partially Available', monitored: 'Monitored', queued: 'In Queue' };
+          return map[status] || status || '';
+        }
+
+        function libraryBadgeClass(status) {
+          if (status === 'available') return 'bg-emerald-500/20 text-emerald-300';
+          if (status === 'partial') return 'bg-amber-500/20 text-amber-300';
+          if (status === 'monitored') return 'bg-indigo-500/20 text-indigo-300';
+          if (status === 'queued') return 'bg-sky-500/20 text-sky-300';
+          return 'bg-slate-700/60 text-slate-300';
+        }
+
+        async function loadDiscover() {
+          loadingDiscover.value = true;
+          discoverError.value = '';
+          try {
+            const data = await apiFetch('/api/discover');
+            discover.value = {
+              spotlight: (data && data.spotlight) || null,
+              trending_movies: (data && data.trending_movies) || [],
+              trending_tv: (data && data.trending_tv) || [],
+              top_rated_movies: (data && data.top_rated_movies) || [],
+              genres: (data && data.genres) || [],
+            };
+            markBackend(true);
+          } catch (e) {
+            discoverError.value = 'Could not load Discover: ' + e.message;
+            markBackend(false);
+          } finally {
+            loadingDiscover.value = false;
+          }
+        }
+
+        async function loadGenre(genre) {
+          genreFilter.value = genre;
+          loadingGenre.value = true;
+          try {
+            const data = await apiFetch(`/api/discover/genre?genre=${encodeURIComponent(genre)}&media_type=${genreType.value}`);
+            genreItems.value = (data && data.items) || [];
+            markBackend(true);
+          } catch (e) {
+            genreItems.value = [];
+            showToast('Genre browse failed: ' + e.message, 'error');
+          } finally {
+            loadingGenre.value = false;
+          }
+        }
+
+        function clearGenre() {
+          genreFilter.value = '';
+          genreItems.value = [];
+        }
+
+        function backToDiscover() {
+          searched.value = false;
+          searchResults.value = [];
+          searchQuery.value = '';
+          if (!discover.value.trending_movies.length) loadDiscover();
+        }
+
+        function openDiscoverItem(item) {
+          if (!item) return;
+          openReleaseModal(item, item.media_type === 'tv' ? 'tv' : 'movie');
+        }
+
+        function openSimilar(item) {
+          const title = item.title || '';
+          openReleaseModal(
+            Object.assign({}, item, { title: title, id: item.imdb_id || item.id }),
+            (modalType.value === 'tv' || item.media_type === 'tv') ? 'tv' : 'movie'
+          );
+        }
+
+        async function loadMovieDetails(imdbId) {
+          loadingDetailInfo.value = true;
+          detailInfo.value = null;
+          try {
+            const data = await apiFetch(`/api/movie/${imdbId}/details`);
+            detailInfo.value = data || null;
+            similarTitles.value = (data && data.similar) || [];
+            markBackend(true);
+          } catch (e) {
+            detailInfo.value = null;
+            similarTitles.value = [];
+          } finally {
+            loadingDetailInfo.value = false;
+          }
+        }
+
         function closeModal() {
           selectedItem.value = null;
           releases.value = [];
           tvDetails.value = null;
+          detailInfo.value = null;
+          similarTitles.value = [];
           restoreFocus();
         }
 
-        async function openReleaseModal(item) {
+        async function openReleaseModal(item, type) {
           lastFocusedEl = document.activeElement;
           selectedItem.value = item;
           releases.value = [];
           filterResolution.value = 'all';
           sortBy.value = 'score';
+          detailInfo.value = null;
+          similarTitles.value = [];
+          modalType.value = type || (item && item.media_type) || searchType.value;
           nextTick(() => { if (modalDialog.value) modalDialog.value.focus(); });
 
-          if (searchType.value === 'tv') {
+          if (modalType.value === 'tv') {
             await loadTvDetails(item.id);
           } else {
+            const imdbId = item.imdb_id || (typeof item.id === 'string' && item.id.startsWith('tt') ? item.id : null);
+            if (imdbId) loadMovieDetails(imdbId);
             fetchReleases();
           }
         }
@@ -986,6 +1383,7 @@
           tvDetails.value = null;
           try {
             tvDetails.value = await apiFetch(`/api/tv/${showId}/details`);
+            similarTitles.value = (tvDetails.value && tvDetails.value.similar) || [];
             if (tvDetails.value.seasons && tvDetails.value.seasons.length) {
               selectedSeason.value = tvDetails.value.seasons[0].season_number;
               tvScope.value = 'pack';
@@ -1023,7 +1421,7 @@
           releases.value = [];
           try {
             let url = '';
-            if (searchType.value === 'movie') {
+            if (modalType.value === 'movie') {
               url = `/api/releases/movie?title=${encodeURIComponent(selectedItem.value.title)}&year=${selectedItem.value.year || ''}&imdb_id=${selectedItem.value.imdb_id || ''}`;
             } else {
               const pack = tvScope.value === 'pack';
@@ -1047,7 +1445,7 @@
               imdb = selectedItem.value.id;
             }
             let tmdb = null;
-            if (searchType.value === 'tv') {
+            if (modalType.value === 'tv') {
               const rawId = (tvDetails.value && tvDetails.value.id) || selectedItem.value.id;
               const parsed = parseInt(rawId, 10);
               if (!isNaN(parsed)) tmdb = parsed;
@@ -1060,7 +1458,7 @@
               title: r.title,
               infohash: r.infohash,
               magnet: r.magnet,
-              media_type: searchType.value,
+              media_type: modalType.value,
               seeds: r.seeds,
               peers: r.peers,
               size_bytes: r.size_bytes,
@@ -1070,22 +1468,57 @@
               is_pack: r.is_pack,
               display_title: selectedItem.value.title,
               year: selectedItem.value.year,
-              season: searchType.value === 'tv' ? selectedSeason.value : null,
-              episode: (searchType.value === 'tv' && tvScope.value === 'episode') ? selectedEpisode.value : null,
+              season: modalType.value === 'tv' ? selectedSeason.value : null,
+              episode: (modalType.value === 'tv' && tvScope.value === 'episode') ? selectedEpisode.value : null,
               imdb_id: imdb,
               tmdb_id: tmdb,
             };
-            await apiFetch('/api/queue/download/release', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(body)
-            });
-            showToast('Added to queue: ' + r.title, 'success');
-            closeModal();
-            activeTab.value = 'queue';
+            await postRelease(body, r.title);
           } catch (e) {
             showToast('Could not add release: ' + e.message, 'error');
           }
+        }
+
+        /**
+         * Enqueue a release, confirming first when the title is already in the
+         * library (R3.2: the API answers 409 until the client forces it).
+         */
+        async function postRelease(body, label) {
+          const send = (force) => apiFetch('/api/queue/download/release', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(Object.assign({}, body, force ? { force: true } : {})),
+          });
+          try {
+            await send(false);
+            enqueued(label);
+          } catch (e) {
+            if (e.status !== 409) throw e;
+            const already = e.message && e.message.indexOf('Already in Library') !== -1
+              ? e.message
+              : `Already in Library — '${selectedItem.value ? selectedItem.value.title : label}' is already downloaded in your library. Do you want to download it again?`;
+            requestConfirm({
+              title: 'Already in Library',
+              message: already,
+              confirmLabel: 'Download again',
+              cancelLabel: 'Cancel',
+              destructive: false,
+              onConfirm: async () => {
+                try {
+                  await send(true);
+                  enqueued(label);
+                } catch (err) {
+                  showToast('Could not add release: ' + err.message, 'error');
+                }
+              },
+            });
+          }
+        }
+
+        function enqueued(label) {
+          showToast('Added to queue: ' + label, 'success');
+          closeModal();
+          activeTab.value = 'queue';
         }
 
         async function ingestMagnet() {
@@ -1367,6 +1800,7 @@
           initWebSocket();
           fetchQueue();
           loadMonitoredSeries();
+          loadDiscover();
         });
 
         watch(() => Boolean(selectedItem.value) || confirmState.value.open, (open) => {
@@ -1375,6 +1809,12 @@
 
         return {
           activeTab, searchType, searchQuery, searching, searched, searchResults, searchError,
+          discover, loadingDiscover, discoverError, genreFilter, genreType, genreItems, loadingGenre,
+          modalType, detailInfo, similarTitles, loadingDetailInfo,
+          detailOverview, detailRating, detailRuntime, detailGenres, detailStars, detailNetwork,
+          modalLibraryStatus, modalInLibrary, spotlightTypeLabel,
+          libraryBadgeClass, libraryBadgeLabel, loadDiscover, loadGenre, clearGenre, backToDiscover,
+          openDiscoverItem, openSimilar, loadMovieDetails,
           selectedItem, loadingReleases, releases, tvScope, selectedSeason, selectedEpisode,
           tvDetails, loadingTvDetails, currentSeasonObj, isMonitored, filterResolution, sortBy, filteredReleases,
           torrents, wsConnected, magnetInput, importing, monitoredList, library, scanningLibrary,

@@ -29,8 +29,8 @@ def client(test_cfg: Config) -> TestClient:
 def test_index_page(client: TestClient) -> None:
     resp = client.get("/")
     assert resp.status_code == 200
-    assert "ARR" in resp.text
-    assert "Shows & Movies Downloader" in resp.text
+    assert "ONYX" in resp.text
+    assert "Onyx — Media Discovery & Downloader" in resp.text
 
 
 def test_api_search_movies(client: TestClient) -> None:
@@ -678,6 +678,44 @@ def test_index_page_phase6_elements(client: TestClient) -> None:
     assert "priorityDown" in resp.text
     assert "filteredReleases" in resp.text
     assert "subtitleLanguagesInput" in resp.text
+
+
+def test_index_page_discover_homepage(client: TestClient) -> None:
+    """R4.3: the homepage is a Seerr-style Discover view, not a blank search box."""
+    resp = client.get("/")
+    assert resp.status_code == 200
+    body = resp.text
+    assert 'data-testid="discover-view"' in body
+    assert "Hero Spotlight" in body or "spotlight" in body
+    assert "Browse by Genre" in body
+    for rail in ("Trending Movies", "Trending TV Shows", "Top Rated Movies"):
+        assert rail in body
+    assert "showDiscover" not in body  # no dead references to removed code
+    assert "loadDiscover" in body
+    assert "loadGenre" in body
+
+
+def test_index_page_availability_badges_and_warning(client: TestClient) -> None:
+    """R3.2/R4.3: badges, the duplicate warning and More Like This are wired in."""
+    resp = client.get("/")
+    body = resp.text
+    assert "libraryBadgeLabel" in body
+    assert "Partially Available" in body
+    assert "In Queue" in body
+    assert "Already in Library" in body
+    assert "Download again" in body
+    assert "/api/movie/" in body
+    assert "loadMovieDetails" in body
+    assert "More Like This" in body
+
+
+def test_index_page_onyx_theme(client: TestClient) -> None:
+    """R5.1: obsidian background and indigo accents."""
+    body = client.get("/").text
+    assert "#090d16" in body
+    assert "#111827" in body
+    assert "#6366f1" in body
+    assert "bg-gradient-to-r from-white via-slate-300 to-indigo-400" in body
 
 
 def test_download_release_propagates_enqueue_failure(client: TestClient) -> None:

@@ -268,7 +268,7 @@ def test_banners_and_headers(mock_console):
     print_banner(mock_console)
     print_header("Test Header", "Test Subtitle", mock_console)
     out = mock_console.export_text()
-    assert "ARR" in out
+    assert "ONYX" in out
     assert "Test Header" in out
     assert "Test Subtitle" in out
 
@@ -571,7 +571,7 @@ def test_main_menu_keyboard_interrupt(test_cfg, mock_console):
     with patch("arr.interactive.app.prompt_text", side_effect=KeyboardInterrupt):
         ret = run_interactive(test_cfg, mock_console)
         assert ret == 0
-        assert "Exiting ARR interactive mode" in mock_console.export_text()
+        assert "Exiting Onyx interactive mode" in mock_console.export_text()
 
 
 def test_main_menu_invalid_then_exit(test_cfg, mock_console):

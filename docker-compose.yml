@@ -44,18 +44,18 @@ services:
       ports:
         - container: 8080
           description:
-            en_us: ARR Web Dashboard port
+            en_us: Onyx Web Dashboard port
         - container: 9091
           description:
             en_us: Transmission Web UI / RPC port
-      author: ARR Team
+      author: Onyx Team
       category: Media
       icon: https://raw.githubusercontent.com/WalkxCode/Dashboard-Icons/main/png/sonarr.png
       title:
-        en_us: ARR Shows & Movies Downloader
+        en_us: Onyx Media Discovery & Downloader
       tagline:
         en_us: Automated Movie & TV Torrent Downloader & Library Manager
       description:
-        en_us: Autonomous BitTorrent media discovery, quality ranking, subtitle fetching, and Sonarr/Radarr library organizer.
+        en_us: Onyx autonomously discovers, downloads, and organises movies and TV shows with zero API keys.
       index: /
       port_map: "8080"

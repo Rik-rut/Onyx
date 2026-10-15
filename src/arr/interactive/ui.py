@@ -69,7 +69,7 @@ def print_banner(c: Console | None = None) -> None:
     """Print the application startup banner."""
     target = c or console
     banner_text = (
-        "[bold cyan]ARR — Shows & Movies Downloader[/bold cyan]\n"
+        "[bold cyan]ONYX — Media Discovery & Downloader[/bold cyan]\n"
         "[dim]Autonomous BitTorrent Search, Quality Ranking & Media Library Manager[/dim]"
     )
     target.print(Panel(banner_text, border_style="blue", padding=(0, 2)))

@@ -55,7 +55,7 @@ def run_interactive(cfg: Config, c: Console | None = None) -> int:
                 except Exception:
                     pass
         if interrupted:
-            target.print("\n[yellow]Exiting ARR interactive mode. Goodbye![/yellow]")
+            target.print("\n[yellow]Exiting Onyx interactive mode. Goodbye![/yellow]")
         else:
             target.print("[yellow]Goodbye![/yellow]")
         return 0

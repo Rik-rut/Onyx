@@ -1,1 +1,1 @@
-"""Web UI application package for ARR."""
+"""Web UI application package for Onyx."""
