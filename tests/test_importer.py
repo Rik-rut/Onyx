@@ -213,3 +213,59 @@ def test_inspect_media_streams_ffprobe_missing(tmp_path, monkeypatch):
     assert streams == {"video": [], "audio": [], "subtitle": []}
     assert has_embedded_subtitles(media, "en") is False
 
+
+def test_delete_path_removes_files_and_trees(tmp_path):
+    from arr.importer.layout import delete_path
+
+    movie = tmp_path / "Inception (2010).mkv"
+    movie.write_bytes(b"x")
+    assert delete_path(movie) is True
+    assert not movie.exists()
+    # deleting something that does not exist reports nothing removed
+    assert delete_path(movie) is False
+
+    raw = tmp_path / "Inception.2010.1080p.BluRay.x264-[YTS.AG]"
+    raw.mkdir()
+    (raw / "movie.mkv").write_bytes(b"x")
+    (raw / "poster.jpg").write_bytes(b"x")
+    assert delete_path(raw) is True
+    assert not raw.exists()
+
+
+def test_prune_empty_dirs_stops_at_media_root(tmp_path):
+    from arr.importer.layout import prune_boundary, prune_empty_dirs
+
+    downloads = tmp_path / "downloads"
+    movies = downloads / "movies"
+    movie_dir = movies / "Inception (2010)"
+    movie_dir.mkdir(parents=True)
+    media = movie_dir / "Inception (2010).mkv"
+    media.write_bytes(b"x")
+
+    assert prune_boundary(media, downloads) == movies
+    media.unlink()
+    assert prune_empty_dirs(movie_dir, movies) == 1
+    assert not movie_dir.exists()
+    # the media root itself is never pruned
+    assert movies.exists()
+
+    # a non-empty directory is left alone
+    keep = movies / "Kung Fu Panda 2 (2011)"
+    keep.mkdir(parents=True)
+    (keep / "Kung Fu Panda 2 (2011).mkv").write_bytes(b"x")
+    assert prune_empty_dirs(keep, movies) == 0
+    assert keep.exists()
+
+
+def test_prune_boundary_staging_and_tv_roots(tmp_path):
+    from arr.importer.layout import prune_boundary
+
+    downloads = tmp_path / "downloads"
+    staging = downloads / ".staging" / "movies" / "Some.Release.2020"
+    assert prune_boundary(staging / "file.mkv", downloads) == downloads / ".staging" / "movies"
+
+    season_dir = downloads / "tv-shows" / "Show (2020)" / "Season 01"
+    assert prune_boundary(season_dir / "Show - S01E01.mkv", downloads) == (
+        downloads / "tv-shows"
+    )
+

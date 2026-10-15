@@ -110,12 +110,16 @@ def interactive_queue(cfg: Config, c: Console | None = None) -> None:
             if not dl_id:
                 continue
             target_id = _resolve_download_id(dl_id, items)
-            del_data = prompt_confirm(
-                "Also delete downloaded data from disk?", default=False, c=target
+            target.print(
+                "[dim]Removing the torrent and deleting its downloaded files "
+                "from downloads/.[/dim]"
             )
             try:
-                asyncio.run(cancel_download(target_id, cfg, delete_data=del_data))
-                target.print(f"[bold green]Cancelled download '{target_id[:8]}'.[/bold green]")
+                asyncio.run(cancel_download(target_id, cfg))
+                target.print(
+                    f"[bold green]Cancelled download '{target_id[:8]}' and deleted its files."
+                    "[/bold green]"
+                )
             except SystemExit as e:
                 if e.code == 3:
                     target.print(f"[bold red]Download '{dl_id}' not found.[/bold red]")

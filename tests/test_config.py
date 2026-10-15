@@ -72,6 +72,19 @@ def test_config_template_round_trips(tmp_path):
     assert cfg.get("imdb_suggestion_base_url", "").startswith("https://")
 
 
+def test_single_folder_storage_defaults():
+    """R2.1: the default pipeline must leave exactly one folder per title."""
+    assert DEFAULTS["import_mode"] == "move"
+    assert DEFAULTS["seeding_policy"] == "remove_on_import"
+
+
+def test_config_template_documents_single_folder_defaults():
+    from arr.config.settings import CONFIG_TEMPLATE
+
+    assert 'import_mode = "move"' in CONFIG_TEMPLATE
+    assert 'seeding_policy = "remove_on_import"' in CONFIG_TEMPLATE
+
+
 def test_save_config_round_trip(tmp_path):
     from arr.config.settings import Config, load_config, save_config
 

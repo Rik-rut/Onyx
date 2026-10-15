@@ -212,6 +212,20 @@ class DB:
         ).fetchall()
         return [dict(r) for r in rows]
 
+    def episodes_for_download(self, infohash: str) -> list[dict]:
+        rows = self._conn.execute(
+            "SELECT * FROM episodes WHERE LOWER(infohash)=LOWER(?) ORDER BY season, episode",
+            (infohash,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def delete_episodes_for_download(self, infohash: str) -> int:
+        cur = self._conn.execute(
+            "DELETE FROM episodes WHERE LOWER(infohash)=LOWER(?)", (infohash,)
+        )
+        self._conn.commit()
+        return int(cur.rowcount or 0)
+
     # monitored_series
     def add_monitored(
         self,

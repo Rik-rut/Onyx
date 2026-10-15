@@ -103,6 +103,61 @@ def test_api_releases_tv(client: TestClient) -> None:
         assert data[0]["score"] == 820
 
 
+def test_queue_delete_removes_torrent_files_and_record(
+    client: TestClient, test_cfg: Config
+) -> None:
+    """R1.2: DELETE /api/queue/{id} removes the torrent, its files, and the DB row."""
+    from arr.pipeline import _db
+
+    hash_ = "f" * 40
+    raw = Path(test_cfg.get("download_dir") or test_cfg.get("library_root")) / "movies" / (
+        "Inception.2010.1080p.BluRay"
+    )
+    raw.mkdir(parents=True)
+    (raw / "Inception.2010.mp4").write_bytes(b"x" * 256)
+    clean = Path(test_cfg.get("library_root")) / "movies" / "Inception (2010)"
+    clean.mkdir(parents=True)
+    (clean / "Inception (2010).mp4").write_bytes(b"x" * 256)
+
+    db = _db(test_cfg)
+    db.add_download(hash_, media_type="movie", title="Inception", year=2010, state="queued")
+    db.set_download_state(
+        hash_,
+        "imported",
+        content_path=str(raw),
+        destination_path=str(clean / "Inception (2010).mp4"),
+    )
+    db.close()
+
+    torrent = {
+        "id": 4,
+        "hashString": hash_,
+        "name": raw.name,
+        "downloadDir": str(raw.parent),
+        "percentDone": 1.0,
+        "status": 6,
+    }
+    with (
+        patch(
+            "arr.transmission.process.RpcClient.list_torrents",
+            new_callable=AsyncMock,
+            return_value=[torrent],
+        ),
+        patch(
+            "arr.transmission.process.RpcClient.remove", new_callable=AsyncMock
+        ) as mock_remove,
+    ):
+        resp = client.delete(f"/api/queue/{hash_}")
+        assert resp.status_code == 200
+        mock_remove.assert_called_once_with(4, delete_data=True)
+
+    assert not raw.exists()
+    assert not clean.exists()
+    db = _db(test_cfg)
+    assert db.get_download(hash_) is None
+    db.close()
+
+
 def test_api_queue_list_and_controls(client: TestClient) -> None:
     t = {
         "id": 1,
@@ -138,10 +193,17 @@ def test_api_queue_list_and_controls(client: TestClient) -> None:
         assert resp.status_code == 200
         mock_start.assert_called_once_with(1)
 
-    with patch("arr.transmission.process.RpcClient.remove", new_callable=AsyncMock) as mock_remove:
+    with (
+        patch(
+            "arr.transmission.process.RpcClient.list_torrents",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
+        patch("arr.transmission.process.RpcClient.remove", new_callable=AsyncMock) as mock_remove,
+    ):
         resp = client.post("/api/queue/1/delete")
         assert resp.status_code == 200
-        mock_remove.assert_called_once_with(1, delete_data=False)
+        mock_remove.assert_called_once_with(1, delete_data=True)
 
 
 def test_api_download_release(client: TestClient) -> None:
@@ -466,8 +528,13 @@ def test_queue_actions_accept_infohash_string(client: TestClient) -> None:
         m_down.assert_called_with(hash_str)
 
         # Delete with hash string
-        resp = client.post(f"/api/queue/{hash_str}/delete")
-        assert resp.status_code == 200
-        m_remove.assert_called_with(hash_str, delete_data=False)
+        with patch(
+            "arr.transmission.process.RpcClient.list_torrents",
+            new_callable=AsyncMock,
+            return_value=[],
+        ):
+            resp = client.post(f"/api/queue/{hash_str}/delete")
+            assert resp.status_code == 200
+        m_remove.assert_called_with(hash_str, delete_data=True)
 
 

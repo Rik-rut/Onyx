@@ -358,7 +358,7 @@ def test_interactive_queue_view(test_cfg, mock_console):
         patch("arr.interactive.queue.cancel_download", new_callable=AsyncMock) as mock_cancel,
     ):
         interactive_queue(test_cfg, mock_console)
-        mock_cancel.assert_called_once_with("hash01", test_cfg, delete_data=False)
+        mock_cancel.assert_called_once_with("hash01", test_cfg)
 
     # Test cancel with index "0"
     with (
@@ -369,7 +369,7 @@ def test_interactive_queue_view(test_cfg, mock_console):
         patch("arr.interactive.queue.cancel_download", new_callable=AsyncMock) as mock_cancel,
     ):
         interactive_queue(test_cfg, mock_console)
-        mock_cancel.assert_called_once_with("hash01", test_cfg, delete_data=False)
+        mock_cancel.assert_called_once_with("hash01", test_cfg)
 
     # Test cancel with short prefix "hash0"
     with (
@@ -380,7 +380,7 @@ def test_interactive_queue_view(test_cfg, mock_console):
         patch("arr.interactive.queue.cancel_download", new_callable=AsyncMock) as mock_cancel,
     ):
         interactive_queue(test_cfg, mock_console)
-        mock_cancel.assert_called_once_with("hash01", test_cfg, delete_data=False)
+        mock_cancel.assert_called_once_with("hash01", test_cfg)
 
     # Test cancel when not found (SystemExit 3 handled gracefully)
     with (

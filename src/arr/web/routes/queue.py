@@ -7,7 +7,7 @@ from pydantic import BaseModel, model_validator
 
 from arr.core.models import MediaType, Release
 from arr.log import get_logger
-from arr.pipeline import _rpc, download_magnet, enqueue_release
+from arr.pipeline import _rpc, download_magnet, enqueue_release, remove_download_and_files
 from arr.transmission.process import RpcClient
 
 logger = get_logger("queue")
@@ -192,28 +192,29 @@ async def resume_torrent(request: Request, torrent_id: str) -> dict[str, str]:
 
 @router.post("/{torrent_id}/delete")
 @router.delete("/{torrent_id}")
-async def delete_torrent(request: Request, torrent_id: str) -> dict[str, str]:
+async def delete_torrent(request: Request, torrent_id: str) -> dict[str, Any]:
+    """Remove a queue item: torrent, downloaded files, and local queue state (R1.1/R1.2)."""
     cfg = request.app.state.cfg
-    cid = _coerce_tid(torrent_id)
+    logger.info(f"Removing torrent {torrent_id} and its downloaded files")
     try:
-        rpc = _get_rpc(cfg)
-        logger.info(f"Removing torrent {cid}")
-        try:
-            await rpc.remove(cid, delete_data=False)
-        except Exception as e:
-            logger.warning(f"Could not remove {cid} from RPC: {e}")
-
-        from arr.pipeline import _db
-
-        db = _db(cfg)
-        try:
-            db.set_download_state(torrent_id, "skipped")
-        finally:
-            db.close()
-
-        return {"status": "deleted", "id": str(torrent_id)}
+        result = await remove_download_and_files(str(torrent_id), cfg)
+        logger.info(
+            f"Removed torrent {torrent_id} "
+            f"[infohash={str(result['infohash'])[:12]}, "
+            f"files={len(result['deleted_paths'])}, "
+            f"torrent_removed={result['torrent_removed']}, "
+            f"rpc_error={result['rpc_error']}]"
+        )
+        return {
+            "status": "deleted",
+            "id": str(torrent_id),
+            "infohash": str(result["infohash"]),
+            "torrent_removed": str(result["torrent_removed"]).lower(),
+            "files_removed": str(len(result["deleted_paths"])),
+            "rpc_error": str(result["rpc_error"] or ""),
+        }
     except Exception as e:
-        logger.error(f"Failed to remove torrent {cid}: {e}")
+        logger.error(f"Failed to remove torrent {torrent_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to remove torrent: {e}") from e
 
 

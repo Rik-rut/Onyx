@@ -36,7 +36,7 @@ DEFAULTS: dict = {
     "subdl_base_url": "https://api.subdl.com",
     "subdl_api_key": "",
     "quality_profile": "default",
-    "seeding_policy": "ratio",
+    "seeding_policy": "remove_on_import",
     "seed_ratio": 1.0,
     "seed_time_hours": 24.0,
     "user_agent": "arr/0.1 (+https://localhost)",
@@ -48,7 +48,7 @@ DEFAULTS: dict = {
     "monitor_poll_interval_minutes": 30,
     "monitor_lookahead_days": 7,
     "unmonitor_ended_series": False,
-    "import_mode": "hardlink",
+    "import_mode": "move",
     "min_seeders": 1,
     "min_size_mb_movie": 200,
     "max_size_mb_movie": 80000,
@@ -92,10 +92,10 @@ eztv_base_url = "https://eztv.re"
 nyaa_base_url = "https://nyaa.si"
 
 quality_profile = "default"
-seeding_policy = "ratio"   # ratio | time | manual | remove_on_import
+seeding_policy = "remove_on_import"   # ratio | time | manual | remove_on_import
 seed_ratio = 1.0
 seed_time_hours = 24.0
-import_mode = "hardlink"   # hardlink | copy | move
+import_mode = "move"   # hardlink | copy | move
 
 user_agent = "arr/0.1"
 min_seeders = 1

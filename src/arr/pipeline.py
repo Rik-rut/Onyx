@@ -12,10 +12,14 @@ from arr.core.models import Episode, MediaType, QualityProfile, Query, Release, 
 from arr.core.parsing import Scored, explain, rank
 from arr.db import DB
 from arr.importer.layout import (
+    delete_path,
     find_episode_file,
     import_episode,
     import_movie,
     media_files,
+    prune_boundary,
+    prune_empty_dirs,
+    subtitle_files_adjacent,
 )
 from arr.indexers import build_adapters
 from arr.log import get_logger
@@ -31,7 +35,7 @@ from arr.series.orchestration import (
     resolve_scope,
 )
 from arr.subtitles.service import ensure_subtitles
-from arr.transmission.errors import DependencyUnavailable, RpcError
+from arr.transmission.errors import DependencyUnavailable
 from arr.transmission.process import (
     RpcClient,
     active_count,
@@ -132,6 +136,8 @@ __all__ = [
     "list_queue",
     "get_status",
     "cancel_download",
+    "remove_download_and_files",
+    "match_torrent",
     "pause_download",
     "resume_download",
     "set_download_priority",
@@ -1200,41 +1206,161 @@ def get_status(download_id, cfg):
     return row or {"error": "not found"}
 
 
-async def cancel_download(download_id, cfg, delete_data=False):
+def match_torrent(torrent_id: str, torrents: list[dict]) -> dict | None:
+    """Match a queue id to a live torrent.
+
+    Queue ids arrive either as Transmission's numeric RPC id (``"1"``) or as an
+    infohash (full or unambiguous prefix), so both forms are resolved here.
+    """
+    tid = str(torrent_id or "").strip().lower()
+    if not tid:
+        return None
+    for t in torrents:
+        if str(t.get("id")) == tid:
+            return t
+    for t in torrents:
+        h = str(t.get("hashString") or "").lower()
+        if h and (h == tid or (len(tid) >= 4 and h.startswith(tid))):
+            return t
+    return None
+
+
+def _coerce_torrent_id(torrent_id: str) -> int | str:
+    s = str(torrent_id).strip()
+    return int(s) if s.isdigit() else s
+
+
+def _delete_media_path(path: Path, cfg: Config) -> bool:
+    """Delete one raw or imported path, its sibling subtitles, and emptied dirs."""
+    library = _library_root(cfg)
+    p = Path(path)
+    boundary = prune_boundary(p, library)
+    if p.is_dir():
+        removed = delete_path(p)
+        if removed:
+            prune_empty_dirs(p, boundary)
+        return removed
+    removed = False
+    for sub in subtitle_files_adjacent(p):
+        removed = delete_path(sub) or removed
+    removed = delete_path(p) or removed
+    if removed:
+        prune_empty_dirs(p.parent, boundary)
+    return removed
+
+
+async def remove_download_and_files(
+    torrent_id: str, cfg: Config, *, delete_files: bool = True
+) -> dict:
+    """Remove a queue item end-to-end (R1.1/R1.2).
+
+    Resolves numeric Transmission RPC ids to their infohash, removes the torrent
+    (``delete_data=True``) so staged payloads go away, deletes both the raw
+    ``content_path`` and the imported ``destination_path`` files (plus sibling
+    subtitles and emptied parent folders), and clears the SQLite ``downloads`` /
+    ``episodes`` rows so the title is no longer reported as downloaded.
+    """
+    result: dict = {
+        "infohash": "",
+        "torrent_found": False,
+        "record_found": False,
+        "torrent_removed": False,
+        "db_removed": False,
+        "deleted_paths": [],
+        "rpc_error": None,
+    }
     db = _db(cfg)
-    rec = db.get_download(download_id)
-    if not rec:
+    try:
+        rec = db.get_download(str(torrent_id))
+        rpc: RpcClient | None = None
+        torrents: list[dict] = []
+        rpc_error: str | None = None
+        try:
+            rpc = _rpc(cfg)
+            torrents = await rpc.list_torrents()
+        except Exception as e:
+            rpc_error = str(e)
+
+        torrent = match_torrent(str(torrent_id), torrents)
+        infohash = str(torrent.get("hashString") or "").lower() if torrent else ""
+        if not infohash and rec is not None:
+            infohash = str(rec.get("infohash") or "")
+        if not infohash:
+            infohash = str(torrent_id).strip()
+        if rec is None and infohash:
+            rec = db.get_download(infohash)
+
+        result["infohash"] = infohash
+        result["torrent_found"] = torrent is not None
+        result["record_found"] = rec is not None
+
+        # 1. Transmission: drop the torrent and, unless disabled, its payload.
+        # When listing already failed the daemon is unreachable, so there is no
+        # verified target to remove and the RPC error is reported instead.
+        if rpc is not None and rpc_error is None:
+            cid: int | str = (
+                _coerce_torrent_id(str(torrent.get("id")))
+                if torrent is not None
+                else _coerce_torrent_id(torrent_id)
+            )
+            try:
+                await rpc.remove(cid, delete_data=delete_files)
+                result["torrent_removed"] = True
+            except Exception as e:
+                rpc_error = str(e)
+        result["rpc_error"] = rpc_error
+
+        # 2. Disk: raw staging data and the imported library copy.
+        if delete_files:
+            paths: list[Path] = []
+            for key in ("content_path", "destination_path"):
+                value = rec.get(key) if rec else None
+                if value:
+                    paths.append(Path(str(value)))
+            if torrent is not None:
+                torrent_content = _torrent_content_path(torrent)
+                if torrent_content is not None:
+                    paths.append(torrent_content)
+            for ep in db.episodes_for_download(infohash):
+                if ep.get("path"):
+                    paths.append(Path(str(ep["path"])))
+            seen: set[str] = set()
+            for p in paths:
+                key = str(p)
+                if key in seen:
+                    continue
+                seen.add(key)
+                if _delete_media_path(p, cfg):
+                    result["deleted_paths"].append(key)
+
+        # 3. SQLite: the title must no longer look downloaded/imported.
+        db.delete_episodes_for_download(infohash)
+        record_hash = str((rec or {}).get("infohash") or infohash)
+        if record_hash and db.get_download(record_hash) is not None:
+            db.delete_download(record_hash)
+            result["db_removed"] = True
+        return result
+    finally:
         db.close()
+
+
+async def cancel_download(download_id, cfg, delete_data: bool = True):
+    """Cancel a queue item, always removing its torrent data and local files.
+
+    R1.1: removing a queue item deletes the torrent from Transmission, the raw
+    staging folder, and the imported library file(s) so `downloads/` does not
+    keep orphaned media.
+    """
+    result = await remove_download_and_files(str(download_id), cfg, delete_files=True)
+    if not (
+        result["record_found"] or result["torrent_found"] or result["deleted_paths"]
+    ):
         print("Not found.", file=sys.stderr)
         raise SystemExit(3)
-    infohash = str(rec["infohash"])
-    rpc_error = None
-    try:
-        rpc = _rpc(cfg)
-        await rpc.remove(infohash, delete_data=delete_data)
-    except DependencyUnavailable as e:
-        rpc_error = str(e)
-    except RpcError as e:
-        # torrent already gone from the daemon; still mark it locally
-        rpc_error = str(e)
-    if delete_data and rec.get("content_path"):
-        import shutil
-
-        cp = Path(rec["content_path"])
-        if cp.exists():
-            try:
-                if cp.is_dir():
-                    shutil.rmtree(cp)
-                else:
-                    cp.unlink()
-            except OSError:
-                pass
-    db.set_download_state(infohash, "skipped")
-    db.close()
-    if rpc_error:
-        print(f"Torrent removed locally; daemon said: {rpc_error}", file=sys.stderr)
+    if not result["torrent_removed"] and result["rpc_error"]:
+        print(f"Torrent removed locally; daemon said: {result['rpc_error']}", file=sys.stderr)
     else:
-        print(f"Cancelled {infohash}.")
+        print(f"Cancelled {str(result['infohash'])[:12]}.")
 
 
 async def apply_speed_limits(rpc: RpcClient, cfg: Config) -> None:

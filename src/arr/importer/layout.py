@@ -328,6 +328,61 @@ def _episode_sub_filter(
     return lambda s: not _has_any_episode_tag(s)
 
 
+def delete_path(path: Path) -> bool:
+    """Delete a file (or subtree) from disk. Returns True when something was removed."""
+    p = Path(path)
+    try:
+        if p.is_dir():
+            shutil.rmtree(p)
+            return True
+        if p.exists():
+            p.unlink()
+            return True
+    except OSError:
+        return False
+    return False
+
+
+def prune_boundary(path: Path, library_root: Path) -> Path:
+    """The directory `prune_empty_dirs` must never remove for `path`.
+
+    Library media roots (`downloads/movies`, `downloads/tv-shows`) and the
+    `.staging` media roots survive pruning so the layout stays intact.
+    """
+    p = Path(path)
+    parts = p.parts
+    if ".staging" in parts:
+        i = parts.index(".staging")
+        keep = list(parts[: i + 2]) if len(parts) > i + 1 else list(parts[: i + 1])
+        return Path(*keep) if keep else Path(p.anchor or "/")
+    for sub in ("movies", "tv-shows"):
+        root = Path(library_root) / sub
+        if root == p or root in p.parents:
+            return root
+    return Path(library_root)
+
+
+def prune_empty_dirs(start: Path, stop_at: Path) -> int:
+    """Remove empty directories from `start` upwards, never removing `stop_at`."""
+    removed = 0
+    stop = Path(stop_at)
+    cur = Path(start)
+    try:
+        if cur.is_file():
+            cur = cur.parent
+    except OSError:
+        return 0
+    # Only walk directories that live strictly below the boundary directory.
+    while cur != stop and stop in cur.parents:
+        try:
+            cur.rmdir()
+        except OSError:
+            break
+        removed += 1
+        cur = cur.parent
+    return removed
+
+
 def _find_ffprobe() -> str | None:
     root = Path(__file__).resolve().parents[3]
     for name in ("ffprobe.exe", "ffprobe"):

@@ -360,7 +360,7 @@ def test_cancel_unknown_exits_3(tmp_path):
     assert e.value.code == 3
 
 
-def test_cancel_marks_skipped_when_daemon_unreachable(tmp_path, monkeypatch):
+def test_cancel_removes_record_when_daemon_unreachable(tmp_path, monkeypatch):
     cfg = make_cfg(tmp_path)
     db = pipeline._db(cfg)
     db.add_download("c".ljust(40, "0"), media_type="movie", title="X", state="added")
@@ -372,13 +372,16 @@ def test_cancel_marks_skipped_when_daemon_unreachable(tmp_path, monkeypatch):
         def __init__(self, *a, **k):
             pass
 
+        async def list_torrents(self):
+            raise DependencyUnavailable("down")
+
         async def remove(self, *a, **k):
             raise DependencyUnavailable("down")
 
     monkeypatch.setattr(pipeline, "_rpc", lambda c: Rpc())
     asyncio.run(pipeline.cancel_download("c".ljust(40, "0"), cfg))
     db = pipeline._db(cfg)
-    assert db.get_download("c".ljust(40, "0"))["state"] == "skipped"
+    assert db.get_download("c".ljust(40, "0")) is None
     db.close()
 
 
@@ -700,6 +703,175 @@ def test_check_disk_space(tmp_path, monkeypatch):
 
     has_space, free_b, req_b = check_disk_space(tmp_path, 20 * (1024**3))
     assert has_space is False
+
+
+class FakeRemoveRpc:
+    """Transmission RPC stub that reports a numeric-id torrent and records removals."""
+
+    def __init__(self, torrents=None, remove_error=None):
+        self.torrents = torrents or []
+        self.remove_error = remove_error
+        self.removed: list[tuple] = []
+        self.listed = 0
+
+    async def list_torrents(self):
+        self.listed += 1
+        return list(self.torrents)
+
+    async def remove(self, torrent_id, delete_data=False):
+        if self.remove_error:
+            raise self.remove_error
+        self.removed.append((torrent_id, delete_data))
+        return {}
+
+
+def _movie_download(tmp_path, hash_="a" * 40, *, state="imported"):
+    """Create a raw release folder + clean library folder for one movie download."""
+    raw = tmp_path / "downloads" / "movies" / "Inception.2010.1080p.BluRay.x264-[YTS.AG]"
+    raw.mkdir(parents=True)
+    (raw / "Inception.2010.1080p.BluRay.x264-[YTS.AG].mp4").write_bytes(b"x" * 512)
+    clean = tmp_path / "downloads" / "movies" / "Inception (2010)"
+    clean.mkdir(parents=True)
+    media = clean / "Inception (2010).mp4"
+    media.write_bytes(b"x" * 512)
+    (clean / "Inception (2010).en.srt").write_text("subs")
+    return raw, clean, media
+
+
+def test_remove_download_and_files_resolves_numeric_rpc_id(tmp_path, monkeypatch):
+    """R1.1/R1.2: a numeric queue id resolves to the infohash, the torrent is
+    removed with its data, and both the raw and imported files are deleted."""
+    cfg = make_cfg(tmp_path)
+    hash_ = "a" * 40
+    raw, clean, _media = _movie_download(tmp_path, hash_)
+    db = pipeline._db(cfg)
+    db.add_download(hash_, media_type="movie", title="Inception", year=2010, state="queued")
+    db.set_download_state(
+        hash_,
+        "imported",
+        content_path=str(raw),
+        destination_path=str(clean / "Inception (2010).mp4"),
+    )
+    db.close()
+
+    rpc = FakeRemoveRpc(
+        [
+            {
+                "id": 7,
+                "hashString": hash_,
+                "name": raw.name,
+                "downloadDir": str(raw.parent),
+            }
+        ]
+    )
+    monkeypatch.setattr(pipeline, "_rpc", lambda c: rpc)
+
+    result = asyncio.run(pipeline.remove_download_and_files("7", cfg))
+
+    assert rpc.removed == [(7, True)]
+    assert result["infohash"] == hash_
+    assert result["torrent_removed"] is True
+    assert result["db_removed"] is True
+    assert not raw.exists()
+    assert not clean.exists()  # empty movie folder (and its subtitles) pruned
+    assert (tmp_path / "downloads" / "movies").exists()
+
+    db = pipeline._db(cfg)
+    assert db.get_download(hash_) is None
+    db.close()
+
+
+def test_remove_download_and_files_deletes_tv_episodes(tmp_path, monkeypatch):
+    """R1.2: TV downloads delete every imported episode file and their DB rows."""
+    cfg = make_cfg(tmp_path)
+    hash_ = "b" * 40
+    show = tmp_path / "downloads" / "tv-shows" / "Show (2020)"
+    season = show / "Season 01"
+    season.mkdir(parents=True)
+    ep1 = season / "Show - S01E01 - A.mkv"
+    ep2 = season / "Show - S01E02 - B.mkv"
+    for f in (ep1, ep2):
+        f.write_bytes(b"x" * 128)
+
+    db = pipeline._db(cfg)
+    db.add_download(hash_, media_type="tv", title="Show", year=2020, tmdb_id=10, season=1)
+    db.set_download_state(hash_, "imported", destination_path=str(ep1))
+    db.set_episode_state(10, 1, 1, "imported", infohash=hash_, path=str(ep1))
+    db.set_episode_state(10, 1, 2, "imported", infohash=hash_, path=str(ep2))
+    db.close()
+
+    rpc = FakeRemoveRpc([])
+    monkeypatch.setattr(pipeline, "_rpc", lambda c: rpc)
+
+    asyncio.run(pipeline.remove_download_and_files(hash_, cfg))
+
+    assert rpc.removed == [(hash_, True)]
+    assert not ep1.exists() and not ep2.exists()
+    assert not season.exists() and not show.exists()
+    db = pipeline._db(cfg)
+    assert db.get_download(hash_) is None
+    assert db.episodes_for_series(10) == []
+    db.close()
+
+
+def test_remove_download_and_files_survives_dead_daemon(tmp_path, monkeypatch):
+    """Local data is still removed when Transmission is unreachable."""
+    cfg = make_cfg(tmp_path)
+    hash_ = "c" * 40
+    raw, clean, _media = _movie_download(tmp_path, hash_)
+    db = pipeline._db(cfg)
+    db.add_download(hash_, media_type="movie", title="Inception", year=2010, state="queued")
+    db.set_download_state(
+        hash_,
+        "imported",
+        content_path=str(raw),
+        destination_path=str(clean / "Inception (2010).mp4"),
+    )
+    db.close()
+
+    class DeadRpc:
+        async def list_torrents(self):
+            raise RuntimeError("daemon down")
+
+        async def remove(self, *a, **k):  # pragma: no cover - must not be reached
+            raise AssertionError("remove must not be called on a dead daemon")
+
+    monkeypatch.setattr(pipeline, "_rpc", lambda c: DeadRpc())
+
+    result = asyncio.run(pipeline.remove_download_and_files(hash_, cfg))
+
+    assert result["torrent_removed"] is False
+    assert "daemon down" in str(result["rpc_error"])
+    assert not raw.exists() and not clean.exists()
+    db = pipeline._db(cfg)
+    assert db.get_download(hash_) is None
+    db.close()
+
+
+def test_cancel_download_deletes_files_and_record(tmp_path, monkeypatch):
+    """R1.1: the CLI cancel path always removes the torrent data and local files."""
+    cfg = make_cfg(tmp_path)
+    hash_ = "d" * 40
+    raw, clean, media = _movie_download(tmp_path, hash_)
+    db = pipeline._db(cfg)
+    db.add_download(hash_, media_type="movie", title="Inception", year=2010, state="queued")
+    db.set_download_state(
+        hash_, "imported", content_path=str(raw), destination_path=str(media)
+    )
+    db.close()
+
+    rpc = FakeRemoveRpc(
+        [{"id": 2, "hashString": hash_, "name": raw.name, "downloadDir": str(raw.parent)}]
+    )
+    monkeypatch.setattr(pipeline, "_rpc", lambda c: rpc)
+
+    asyncio.run(pipeline.cancel_download(hash_, cfg))
+
+    assert rpc.removed == [(2, True)]
+    assert not raw.exists() and not clean.exists()
+    db = pipeline._db(cfg)
+    assert db.get_download(hash_) is None
+    db.close()
 
 
 
