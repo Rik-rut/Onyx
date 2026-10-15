@@ -11,10 +11,44 @@ from arr.core.parsing import explain
 from arr.log import get_logger
 from arr.metadata.imdb import ImdbClient
 from arr.metadata.tvmaze import TvmazeClient
-from arr.pipeline import search_candidates
+from arr.pipeline import check_media_availability, search_candidates
 
 logger = get_logger("search")
 router = APIRouter(prefix="/api", tags=["search"])
+
+
+def _imdb_like(value: Any) -> str | None:
+    text = str(value or "")
+    return text if text.startswith("tt") else None
+
+
+def annotate_availability(
+    cfg: Any, items: list[dict[str, Any]], media_type: str
+) -> list[dict[str, Any]]:
+    """Attach `in_library` / `library_status` to search or discover results (R3.2)."""
+    out: list[dict[str, Any]] = []
+    for item in items:
+        enriched = dict(item)
+        title = str(item.get("title") or item.get("name") or "")
+        tmdb_id = item.get("id") if media_type == "tv" else None
+        try:
+            avail = check_media_availability(
+                cfg,
+                media_type=media_type,
+                title=title,
+                year=item.get("year"),
+                imdb_id=_imdb_like(item.get("imdb_id")) or _imdb_like(item.get("id")),
+                tmdb_id=int(tmdb_id) if isinstance(tmdb_id, int) else None,
+            )
+        except Exception as e:
+            logger.debug(f"Availability check failed for '{title}': {e}")
+            avail = {}
+        enriched["in_library"] = bool(avail.get("in_library"))
+        enriched["library_status"] = avail.get("status")
+        enriched["available_seasons"] = avail.get("available_seasons") or {}
+        enriched["monitored"] = bool(avail.get("monitored"))
+        out.append(enriched)
+    return out
 
 
 @router.get("/search/movies")
@@ -27,7 +61,7 @@ async def search_movies(
     try:
         results = await asyncio.to_thread(imdb.search_movies, q)
         logger.info(f"Found {len(results)} movie result(s) for '{q}'")
-        return results
+        return await asyncio.to_thread(annotate_availability, cfg, results, "movie")
     except Exception as e:
         logger.error(f"Movie search failed for '{q}': {e}")
         raise HTTPException(status_code=500, detail=f"Search failed: {e}") from e
@@ -43,7 +77,7 @@ async def search_tv(
     try:
         results = await asyncio.to_thread(tvmaze.search_tv_shows, q)
         logger.info(f"Found {len(results)} TV show result(s) for '{q}'")
-        return results
+        return await asyncio.to_thread(annotate_availability, cfg, results, "tv")
     except Exception as e:
         logger.error(f"TV search failed for '{q}': {e}")
         raise HTTPException(status_code=500, detail=f"Search failed: {e}") from e
@@ -74,11 +108,35 @@ async def get_tv_details(request: Request, show_id: int) -> dict[str, Any]:
                 }
             )
 
-        seasons = [
+        seasons: list[dict[str, Any]] = [
             {"season_number": s, "episodes": seasons_dict[s]}
             for s in sorted(seasons_dict.keys())
         ]
         logger.info(f"Loaded {len(seasons)} season(s) for '{series.title}'")
+
+        # R3.2: flag episodes that are already on disk and report library status.
+        availability: dict[str, Any] = {}
+        try:
+            availability = await asyncio.to_thread(
+                check_media_availability,
+                cfg,
+                media_type="tv",
+                title=series.title,
+                year=series.year,
+                imdb_id=series.imdb_id,
+                tmdb_id=series.tmdb_id,
+            )
+        except Exception as e:
+            logger.debug(f"Availability check failed for '{series.title}': {e}")
+            availability = {}
+        raw_available = availability.get("available_seasons")
+        available_seasons: dict[str, list[int]] = (
+            raw_available if isinstance(raw_available, dict) else {}
+        )
+        for season in seasons:
+            present = set(available_seasons.get(str(season["season_number"]), []))
+            for ep in season["episodes"]:
+                ep["available"] = int(ep.get("episode_number") or 0) in present
 
         return {
             "id": series.tmdb_id,
@@ -88,6 +146,10 @@ async def get_tv_details(request: Request, show_id: int) -> dict[str, Any]:
             "tvdb_id": series.tvdb_id,
             "status": series.status,
             "seasons": seasons,
+            "in_library": bool(availability.get("in_library")),
+            "library_status": availability.get("status"),
+            "monitored": bool(availability.get("monitored")),
+            "available_seasons": available_seasons,
         }
     except Exception as e:
         logger.error(f"Failed to fetch show details for ID {show_id}: {e}")

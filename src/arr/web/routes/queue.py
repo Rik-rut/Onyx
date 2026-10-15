@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
@@ -7,7 +8,13 @@ from pydantic import BaseModel, model_validator
 
 from arr.core.models import MediaType, Release
 from arr.log import get_logger
-from arr.pipeline import _rpc, download_magnet, enqueue_release, remove_download_and_files
+from arr.pipeline import (
+    _rpc,
+    check_media_availability,
+    download_magnet,
+    enqueue_release,
+    remove_download_and_files,
+)
 from arr.transmission.process import RpcClient
 
 logger = get_logger("queue")
@@ -265,6 +272,7 @@ class DownloadReleaseRequest(BaseModel):
     episode: int | None = None
     imdb_id: str | None = None
     tmdb_id: int | None = None
+    force: bool = False
 
     @model_validator(mode="before")
     @classmethod
@@ -313,6 +321,32 @@ async def download_release(request: Request, body: DownloadReleaseRequest) -> di
         f"[hash={body.infohash[:8]}..., type={body.media_type}, "
         f"year={body.year}, imdb={body.imdb_id}, tmdb={body.tmdb_id}]"
     )
+    if not body.force:
+        # R3.2: warn instead of silently downloading something already in downloads/.
+        try:
+            display = body.display_title or body.title
+            availability = await asyncio.to_thread(
+                check_media_availability,
+                cfg,
+                media_type=body.media_type,
+                title=display,
+                year=body.year,
+                imdb_id=body.imdb_id,
+                tmdb_id=body.tmdb_id,
+                season=body.season,
+                episode=body.episode,
+            )
+        except Exception as e:
+            logger.debug(f"Availability check failed for '{body.title}': {e}")
+            availability = {}
+        if availability.get("in_library") or availability.get("status") == "available":
+            label = body.display_title or body.title
+            detail = (
+                f"Already in Library — '{label}' is already downloaded in your library. "
+                "Do you want to download it again?"
+            )
+            logger.info(f"Duplicate download blocked pending confirmation: '{label}'")
+            raise HTTPException(status_code=409, detail=detail)
     try:
         ok, res = await enqueue_release(
             release,

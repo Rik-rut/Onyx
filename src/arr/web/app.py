@@ -32,11 +32,18 @@ async def lifespan(app: FastAPI):
     async def _startup_maintenance() -> None:
         """R2.3/R3.1: normalise downloads/ and index the disk library on startup."""
         try:
-            from arr.pipeline import cleanup_duplicate_folders
+            from arr.pipeline import cleanup_duplicate_folders, sync_disk_library
 
             removed = await asyncio.to_thread(cleanup_duplicate_folders, cfg)
             if removed:
                 logger.info(f"Startup cleanup removed {removed} duplicate folder(s)")
+            stats = await asyncio.to_thread(sync_disk_library, cfg)
+            logger.info(
+                "Startup library scan: "
+                f"{stats.get('movies', 0)} movie(s), {stats.get('shows', 0)} show(s), "
+                f"{stats.get('episodes', 0)} episode(s), "
+                f"{stats.get('monitored', 0)} auto-monitored"
+            )
         except Exception as e:
             logger.warning(f"Startup library maintenance failed: {e}")
 

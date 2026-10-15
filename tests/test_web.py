@@ -330,6 +330,125 @@ def test_favicon(client: TestClient) -> None:
     assert "<svg" in resp.text
 
 
+def test_search_movies_annotated_with_library_status(client: TestClient, test_cfg: Config) -> None:
+    """R3.2: search results carry availability metadata from the disk library."""
+    folder = Path(test_cfg.get("library_root")) / "movies" / "Inception (2010)"
+    folder.mkdir(parents=True)
+    (folder / "Inception (2010).mkv").write_bytes(b"x" * 256)
+
+    mock_results = [
+        {"id": "tt1375666", "title": "Inception", "year": 2010},
+        {"id": "tt0000001", "title": "Some Other Movie", "year": 1999},
+    ]
+    with patch("arr.metadata.imdb.ImdbClient.search_movies", return_value=mock_results):
+        resp = client.get("/api/search/movies?q=Inception")
+        assert resp.status_code == 200
+        data = resp.json()
+    assert data[0]["in_library"] is True
+    assert data[0]["library_status"] == "available"
+    assert data[1]["in_library"] is False
+    assert data[1]["library_status"] is None
+
+
+def test_search_tv_annotated_with_library_status(client: TestClient, test_cfg: Config) -> None:
+    """R3.2: a TV show found on disk is reported as available/monitored."""
+    season = Path(test_cfg.get("library_root")) / "tv-shows" / "Breaking Bad (2008)" / "Season 01"
+    season.mkdir(parents=True)
+    (season / "Breaking Bad - S01E01 - Pilot.mkv").write_bytes(b"x" * 256)
+
+    mock_results = [
+        {"id": 1, "title": "Breaking Bad", "name": "Breaking Bad", "year": 2008, "externals": {}}
+    ]
+    with patch("arr.metadata.tvmaze.TvmazeClient.search_tv_shows", return_value=mock_results):
+        resp = client.get("/api/search/tv?q=Breaking+Bad")
+        assert resp.status_code == 200
+        data = resp.json()
+    assert data[0]["in_library"] is True
+    assert data[0]["library_status"] in ("available", "partial")
+    assert data[0]["available_seasons"] == {"1": [1]}
+
+
+def test_tv_details_marks_on_disk_episodes_available(client: TestClient, test_cfg: Config) -> None:
+    """R3.2: individual episodes already on disk are flagged in the details modal."""
+    from arr.core.models import Series
+
+    season_dir = Path(test_cfg.get("library_root")) / "tv-shows" / "Show (2020)" / "Season 01"
+    season_dir.mkdir(parents=True)
+    (season_dir / "Show - S01E01 - A.mkv").write_bytes(b"x" * 256)
+
+    series = Series(tmdb_id=10, title="Show", year=2020, imdb_id="tt10", status="Ended")
+    episodes_payload = [
+        {"season": 1, "number": 1, "name": "A", "airdate": "2020-01-01"},
+        {"season": 1, "number": 2, "name": "B", "airdate": "2020-01-08"},
+    ]
+    with (
+        patch("arr.metadata.tvmaze.TvmazeClient.tv_details", return_value=series),
+        patch("arr.metadata.tvmaze.TvmazeClient._get", return_value=episodes_payload),
+    ):
+        resp = client.get("/api/tv/10/details")
+        assert resp.status_code == 200
+        data = resp.json()
+
+    assert data["in_library"] is True
+    assert data["library_status"] in ("available", "partial")
+    eps = data["seasons"][0]["episodes"]
+    assert eps[0]["available"] is True
+    assert eps[1]["available"] is False
+
+
+def test_download_release_warns_when_already_available(
+    client: TestClient, test_cfg: Config
+) -> None:
+    """R3.2: re-downloading an available title requires an explicit confirmation."""
+    folder = Path(test_cfg.get("library_root")) / "movies" / "Inception (2010)"
+    folder.mkdir(parents=True)
+    (folder / "Inception (2010).mkv").write_bytes(b"x" * 256)
+
+    payload = {
+        "indexer": "yts",
+        "title": "Inception 2010 1080p",
+        "infohash": "h789",
+        "magnet": "magnet:?xt=urn:btih:h789",
+        "media_type": "movie",
+        "display_title": "Inception",
+        "year": 2010,
+        "seeds": 10,
+        "size_bytes": 1000,
+    }
+    with patch(
+        "arr.web.routes.queue.enqueue_release", new_callable=AsyncMock, return_value=(True, "added")
+    ) as mock_enq:
+        resp = client.post("/api/queue/download/release", json=payload)
+        assert resp.status_code == 409
+        assert "already" in resp.json()["detail"].lower()
+        mock_enq.assert_not_called()
+
+        resp_forced = client.post("/api/queue/download/release", json=dict(payload, force=True))
+        assert resp_forced.status_code == 200
+        assert resp_forced.json()["status"] == "queued"
+        mock_enq.assert_called_once()
+
+
+def test_download_release_allows_new_movie(client: TestClient) -> None:
+    """A title that is not in the library is enqueued without any warning."""
+    payload = {
+        "indexer": "yts",
+        "title": "Brand New Movie 2024 1080p",
+        "infohash": "h790",
+        "magnet": "magnet:?xt=urn:btih:h790",
+        "media_type": "movie",
+        "year": 2024,
+        "seeds": 10,
+        "size_bytes": 1000,
+    }
+    with patch(
+        "arr.web.routes.queue.enqueue_release", new_callable=AsyncMock, return_value=(True, "added")
+    ) as mock_enq:
+        resp = client.post("/api/queue/download/release", json=payload)
+        assert resp.status_code == 200
+        mock_enq.assert_called_once()
+
+
 def test_priority_up_and_down(client: TestClient) -> None:
     with patch("arr.web.routes.queue._get_rpc") as mock_rpc_fn:
         mock_rpc = AsyncMock()

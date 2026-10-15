@@ -24,10 +24,11 @@ async def get_library(request: Request) -> dict[str, Any]:
 
     logger.info(f"Scanning media library root: {lib_root}")
     try:
-        from arr.pipeline import cleanup_duplicate_folders
+        from arr.pipeline import cleanup_duplicate_folders, sync_disk_library
 
-        # R2.3: a rescan also collapses leftover raw release folders.
+        # R2.3/R3.1: a rescan collapses leftover raw folders and re-indexes disk media.
         await asyncio.to_thread(cleanup_duplicate_folders, cfg)
+        sync_stats = await asyncio.to_thread(sync_disk_library, cfg)
         raw_movies = await asyncio.to_thread(get_library_movies, movies_dir, cfg)
         raw_shows = await asyncio.to_thread(get_library_shows, tv_dir, cfg)
 
@@ -53,7 +54,7 @@ async def get_library(request: Request) -> dict[str, Any]:
             }
             for s in raw_shows
         ]
-        return {"movies": movies, "shows": shows}
+        return {"movies": movies, "shows": shows, "sync": sync_stats}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to scan library: {e}") from e
 

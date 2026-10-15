@@ -12,6 +12,7 @@ from arr.core.models import Episode, MediaType, QualityProfile, Query, Release, 
 from arr.core.parsing import Scored, explain, rank
 from arr.db import DB
 from arr.importer.layout import (
+    MEDIA_EXTS,
     delete_path,
     find_episode_file,
     import_episode,
@@ -144,6 +145,8 @@ __all__ = [
     "remove_download_and_files",
     "match_torrent",
     "cleanup_duplicate_folders",
+    "sync_disk_library",
+    "check_media_availability",
     "pause_download",
     "resume_download",
     "set_download_priority",
@@ -1619,6 +1622,358 @@ def cleanup_duplicate_folders(cfg: Config, db: DB | None = None) -> int:
     return removed
 
 
+_EPISODE_TAG_RE = re.compile(r"[Ss](\d{1,2})[Ee](\d{1,2})")
+_DISK_HASH_PREFIX = "disk-"
+
+
+def _normalize_title(title: object) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", str(title or "").lower()).strip()
+
+
+def _disk_infohash(path: Path) -> str:
+    import hashlib
+
+    digest = hashlib.sha1(str(path).encode("utf-8")).hexdigest()[:16]
+    return f"{_DISK_HASH_PREFIX}{digest}"
+
+
+def _parse_title_year(name: str) -> tuple[str, int | None]:
+    """`<Title> (<Year>)` or a raw release name -> (title, year)."""
+    from arr.importer.layout import folder_title, is_clean_folder_name, parse_raw_release_name
+
+    name = str(name)
+    if is_clean_folder_name(name):
+        m = re.search(r"\((\d{4})\)\s*$", name.strip())
+        return folder_title(name), (int(m.group(1)) if m else None)
+    return parse_raw_release_name(name)
+
+
+def _media_path_for(entry: Path) -> Path | None:
+    """Primary media file inside a library entry (folder or single file)."""
+    if entry.is_dir():
+        files = media_files(entry)
+    elif entry.suffix.lower() in MEDIA_EXTS:
+        files = [entry]
+    else:
+        files = []
+    if not files:
+        return None
+    return max(files, key=lambda p: p.stat().st_size)
+
+
+def _movie_matches(rec_title: object, rec_year: object, title: str, year: int | None) -> bool:
+    if _normalize_title(rec_title) != _normalize_title(title):
+        return False
+    if year is None or rec_year is None:
+        return True
+    try:
+        return int(str(rec_year)) == int(year)
+    except (TypeError, ValueError):
+        return True
+
+
+def _find_movie_record(db: DB, title: str, year: int | None, imdb_id: str | None) -> dict | None:
+    best: dict | None = None
+    for rec in db.list_downloads():
+        if str(rec.get("media_type") or "") != "movie":
+            continue
+        if imdb_id and str(rec.get("imdb_id") or "") == str(imdb_id):
+            return rec
+        if _movie_matches(rec.get("title"), rec.get("year"), title, year):
+            if str(rec.get("state")) == "imported":
+                return rec
+            best = best or rec
+    return best
+
+
+def _find_movie_on_disk(cfg: Config, title: str, year: int | None) -> Path | None:
+    movies_dir = _library_root(cfg) / "movies"
+    if not movies_dir.is_dir():
+        return None
+    for entry in sorted(movies_dir.iterdir()):
+        if entry.name.startswith("."):
+            continue
+        entry_title, entry_year = _parse_title_year(entry.name if entry.is_dir() else entry.stem)
+        if not _movie_matches(entry_title, entry_year, title, year):
+            continue
+        media = _media_path_for(entry)
+        if media is not None:
+            return media
+    return None
+
+
+def _disk_shows(cfg: Config) -> list[Path]:
+    tv_dir = _library_root(cfg) / "tv-shows"
+    if not tv_dir.is_dir():
+        return []
+    return [
+        p
+        for p in sorted(tv_dir.iterdir())
+        if p.is_dir() and not p.name.startswith(".") and media_files(p)
+    ]
+
+
+def _disk_episodes(
+    cfg: Config, title: str
+) -> tuple[dict[int, list[int]], dict[tuple[int, int], Path]]:
+    """Episodes physically present for one show: `{season: [episode, ...]}` plus paths."""
+    seasons: dict[int, list[int]] = {}
+    paths: dict[tuple[int, int], Path] = {}
+    wanted = _normalize_title(title)
+    for show_dir in _disk_shows(cfg):
+        show_title, _year = _parse_title_year(show_dir.name)
+        if _normalize_title(show_title) != wanted:
+            continue
+        for media in media_files(show_dir):
+            m = _EPISODE_TAG_RE.search(media.name)
+            if not m:
+                continue
+            season, episode = int(m.group(1)), int(m.group(2))
+            seasons.setdefault(season, [])
+            if episode not in seasons[season]:
+                seasons[season].append(episode)
+            paths.setdefault((season, episode), media)
+    for season in seasons:
+        seasons[season].sort()
+    return seasons, paths
+
+
+def _find_monitored(db: DB, title: str, tmdb_id: int | None = None) -> dict | None:
+    normalized = _normalize_title(title)
+    for row in db.list_monitored():
+        if tmdb_id is not None and int(row.get("tmdb_id") or 0) == int(tmdb_id):
+            return row
+        if _normalize_title(row.get("title")) == normalized:
+            return row
+    return None
+
+
+def _queued_tv(db: DB, title: str) -> list[dict]:
+    normalized = _normalize_title(title)
+    out = []
+    for rec in db.list_downloads():
+        if str(rec.get("media_type") or "") != "tv":
+            continue
+        if _normalize_title(rec.get("title")) != normalized:
+            continue
+        if str(rec.get("state") or "") in ("queued", "added", "downloading", "completed"):
+            out.append(rec)
+    return out
+
+
+def sync_disk_library(cfg: Config, db: DB | None = None) -> dict[str, int]:
+    """Index media already on disk and auto-monitor its TV shows (R3.1).
+
+    Movies found in `downloads/movies` get an `imported` record (metadata resolved
+    best effort), and TV shows found in `downloads/tv-shows` are added to
+    `monitored_series` with every on-disk episode marked `imported`, so missing
+    and future episodes stay tracked.
+    """
+    cleanup_duplicate_folders(cfg, db)
+    own_db = db is None
+    local_db = _db(cfg) if db is None else db
+    stats = {"movies": 0, "shows": 0, "episodes": 0, "monitored": 0}
+    try:
+        try:
+            stats["movies"] = _sync_disk_movies(cfg, local_db)
+        except Exception as e:
+            logger.warning(f"Disk movie scan failed: {e}")
+        try:
+            shows, episodes, monitored = _sync_disk_shows(cfg, local_db)
+            stats["shows"] = shows
+            stats["episodes"] = episodes
+            stats["monitored"] = monitored
+        except Exception as e:
+            logger.warning(f"Disk TV scan failed: {e}")
+    finally:
+        if own_db:
+            local_db.close()
+    return stats
+
+
+def _sync_disk_movies(cfg: Config, db: DB) -> int:
+    movies_dir = _library_root(cfg) / "movies"
+    if not movies_dir.is_dir():
+        return 0
+    records = [r for r in db.list_downloads() if str(r.get("media_type") or "") == "movie"]
+    added = 0
+    for entry in sorted(movies_dir.iterdir()):
+        if entry.name.startswith("."):
+            continue
+        media = _media_path_for(entry)
+        if media is None:
+            continue
+        title, year = _parse_title_year(entry.name if entry.is_dir() else entry.stem)
+        if not title or title == "Unknown":
+            continue
+        if any(
+            _movie_matches(r.get("title"), r.get("year"), title, year) for r in records
+        ):
+            continue
+        imdb_id = None
+        try:
+            meta = ImdbClient(cfg).search_movie(title)
+            if meta:
+                imdb_id = meta.get("imdb_id") or meta.get("id")
+                title = meta.get("title") or title
+                year = meta.get("year") or year
+        except Exception as e:
+            logger.debug(f"IMDb lookup failed for '{title}': {e}")
+        infohash = _disk_infohash(entry)
+        db.add_download(
+            infohash,
+            media_type="movie",
+            title=title,
+            year=year,
+            imdb_id=imdb_id,
+            download_dir=str(entry.parent),
+            state="imported",
+        )
+        db.set_download_state(
+            infohash,
+            "imported",
+            destination_path=str(media),
+            content_path=str(entry if entry.is_dir() else media),
+        )
+        records.append(
+            {"title": title, "year": year, "media_type": "movie", "state": "imported"}
+        )
+        added += 1
+        logger.info(f"Detected existing movie on disk: '{title}' ({year}) -> {media}")
+    return added
+
+
+def _sync_disk_shows(cfg: Config, db: DB) -> tuple[int, int, int]:
+    shows = episodes = monitored = 0
+    for show_dir in _disk_shows(cfg):
+        title, year = _parse_title_year(show_dir.name)
+        if not title or title == "Unknown":
+            continue
+        shows += 1
+        row = _find_monitored(db, title)
+        if row is None:
+            try:
+                client = TvmazeClient(cfg)
+                found = client.search_tv(title)
+                if found:
+                    series = client.full_series(int(found["id"]))
+                    db.add_monitored(
+                        series.tmdb_id, series.title, series.imdb_id, series.status, None
+                    )
+                    row = _find_monitored(db, series.title, series.tmdb_id)
+                    monitored += 1
+                    logger.info(
+                        f"Auto-monitoring '{series.title}' ({year}) found on disk"
+                    )
+            except Exception as e:
+                logger.debug(f"TVMaze lookup failed for '{title}': {e}")
+        if row is None:
+            continue
+        tmdb_id = int(row.get("tmdb_id") or 0)
+        for media in media_files(show_dir):
+            m = _EPISODE_TAG_RE.search(media.name)
+            if not m:
+                continue
+            db.set_episode_state(
+                tmdb_id, int(m.group(1)), int(m.group(2)), "imported", path=str(media)
+            )
+            episodes += 1
+    return shows, episodes, monitored
+
+
+def check_media_availability(
+    cfg: Config,
+    *,
+    media_type: str,
+    title: str,
+    year: int | None = None,
+    imdb_id: str | None = None,
+    tmdb_id: int | None = None,
+    season: int | None = None,
+    episode: int | None = None,
+) -> dict:
+    """Is this title already on disk / monitored / queued? (R3.2)
+
+    Returns ``in_library``, a ``status`` of ``available``/``partial``/``monitored``/
+    ``queued``/``None``, the media ``path`` when known, ``available_seasons``
+    (`{"1": [1, 2]}`) and whether the show is monitored.
+    """
+    result: dict = {
+        "in_library": False,
+        "status": None,
+        "path": None,
+        "available_seasons": {},
+        "monitored": False,
+    }
+    db = _db(cfg)
+    try:
+        if str(media_type or "").lower() == "movie":
+            on_disk = _find_movie_on_disk(cfg, title, year)
+            if on_disk is not None:
+                result.update(in_library=True, status="available", path=str(on_disk))
+                return result
+            rec = _find_movie_record(db, title, year, imdb_id)
+            if rec is not None:
+                state = str(rec.get("state") or "")
+                if state == "imported":
+                    destination = rec.get("destination_path")
+                    result.update(
+                        in_library=destination is not None,
+                        status="available",
+                        path=str(destination) if destination else None,
+                    )
+                elif state in ("queued", "added", "downloading", "completed"):
+                    result["status"] = "queued"
+            return result
+
+        seasons, paths = _disk_episodes(cfg, title)
+        row = _find_monitored(db, title, tmdb_id)
+        queued = _queued_tv(db, title)
+        result["available_seasons"] = {str(s): eps for s, eps in sorted(seasons.items())}
+        result["monitored"] = row is not None
+        if season is not None and episode is not None:
+            episode_on_disk = episode in seasons.get(int(season), [])
+            if episode_on_disk:
+                result.update(
+                    in_library=True,
+                    status="available",
+                    path=str(paths.get((int(season), int(episode))) or ""),
+                )
+            elif any(
+                int(r.get("season") or 0) == int(season)
+                and (r.get("episode") is None or int(r.get("episode") or 0) == int(episode))
+                for r in queued
+            ):
+                result["status"] = "queued"
+            elif row is not None:
+                result["status"] = "monitored"
+            elif seasons.get(int(season)):
+                result["status"] = "partial"
+            return result
+
+        if season is not None:
+            on_disk_season = bool(seasons.get(int(season)))
+            if on_disk_season:
+                result["in_library"] = True
+                result["status"] = "partial" if row is not None else "available"
+            elif any(int(r.get("season") or 0) == int(season) for r in queued):
+                result["status"] = "queued"
+            elif row is not None:
+                result["status"] = "monitored"
+            return result
+
+        if seasons:
+            result["in_library"] = True
+            result["status"] = "partial" if row is not None else "available"
+        elif queued:
+            result["status"] = "queued"
+        elif row is not None:
+            result["status"] = "monitored"
+        return result
+    finally:
+        db.close()
+
+
 async def import_download(download_id, cfg, overwrite=False):
     db = _db(cfg)
     rec = db.get_download(download_id)
@@ -1734,6 +2089,7 @@ def run_daemon(cfg):
             if imported:
                 print(f"Imported {imported} download(s).")
             cleanup_duplicate_folders(cfg, db)
+            sync_disk_library(cfg, db)
             _apply_seeding_policy(cfg, db)
         finally:
             db.close()

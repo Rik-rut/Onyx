@@ -856,6 +856,221 @@ def test_cleanup_duplicate_folders_noop_without_duplicates(tmp_path):
     assert lone.exists()
 
 
+class FakeImdbClient:
+    """Offline IMDb stub returning fixed metadata for a known title."""
+
+    def __init__(self, cfg=None):
+        self.cfg = cfg
+
+    def search_movie(self, title: str):
+        if title.strip().lower() == "inception":
+            return {"title": "Inception", "year": 2010, "imdb_id": "tt1375666", "id": "tt1375666"}
+        return None
+
+
+class FakeTvmazeClient:
+    """Offline TVMaze stub: one show with a two-episode first season."""
+
+    def __init__(self, cfg=None):
+        pass
+
+    def search_tv(self, query: str):
+        if "show" in query.lower():
+            return {
+                "id": 10,
+                "name": "Show",
+                "premiered": "2020-01-01",
+                "externals": {"imdb": "tt10"},
+            }
+        return None
+
+    def full_series(self, tmdb_id: int):
+        return make_series()
+
+
+def test_sync_disk_library_indexes_existing_movies(tmp_path, monkeypatch):
+    """R3.1: a movie already in downloads/movies becomes an imported record."""
+    cfg = make_cfg(tmp_path)
+    folder = tmp_path / "downloads" / "movies" / "Inception (2010)"
+    folder.mkdir(parents=True)
+    media = folder / "Inception (2010).mkv"
+    media.write_bytes(b"x" * 512)
+    (folder / "Inception (2010).en.srt").write_text("subs")
+
+    monkeypatch.setattr(pipeline, "ImdbClient", FakeImdbClient)
+    db = pipeline._db(cfg)
+
+    stats = pipeline.sync_disk_library(cfg, db)
+
+    assert stats["movies"] == 1
+    rows = [r for r in db.list_downloads() if r["media_type"] == "movie"]
+    assert len(rows) == 1
+    rec = rows[0]
+    assert rec["state"] == "imported"
+    assert rec["title"] == "Inception"
+    assert rec["year"] == 2010
+    assert rec["imdb_id"] == "tt1375666"
+    assert rec["destination_path"] == str(media)
+    # idempotent: a second scan adds nothing
+    assert pipeline.sync_disk_library(cfg, db)["movies"] == 0
+    assert len([r for r in db.list_downloads() if r["media_type"] == "movie"]) == 1
+    db.close()
+
+
+def test_sync_disk_library_indexes_movie_without_metadata(tmp_path, monkeypatch):
+    """Metadata lookups are best effort: disk detection still records the movie."""
+    cfg = make_cfg(tmp_path)
+    folder = tmp_path / "downloads" / "movies" / "Unknown Indie Film (2019)"
+    folder.mkdir(parents=True)
+    (folder / "Unknown Indie Film (2019).mp4").write_bytes(b"x" * 256)
+
+    class OfflineImdb:
+        def __init__(self, cfg=None):
+            pass
+
+        def search_movie(self, title):
+            raise RuntimeError("imdb offline")
+
+    monkeypatch.setattr(pipeline, "ImdbClient", OfflineImdb)
+    db = pipeline._db(cfg)
+
+    stats = pipeline.sync_disk_library(cfg, db)
+
+    assert stats["movies"] == 1
+    rec = [r for r in db.list_downloads() if r["media_type"] == "movie"][0]
+    assert rec["title"] == "Unknown Indie Film"
+    assert rec["year"] == 2019
+    assert rec["imdb_id"] is None
+    db.close()
+
+
+def test_sync_disk_library_monitors_tv_and_marks_on_disk_episodes(tmp_path, monkeypatch):
+    """R3.1: on-disk shows are auto-monitored and their episodes marked imported."""
+    cfg = make_cfg(tmp_path)
+    season = tmp_path / "downloads" / "tv-shows" / "Show (2020)" / "Season 01"
+    season.mkdir(parents=True)
+    (season / "Show - S01E01 - A.mkv").write_bytes(b"a" * 128)
+    (season / "Show - S01E02 - B.mkv").write_bytes(b"b" * 128)
+
+    monkeypatch.setattr(pipeline, "TvmazeClient", FakeTvmazeClient)
+    db = pipeline._db(cfg)
+
+    stats = pipeline.sync_disk_library(cfg, db)
+
+    assert stats["shows"] == 1
+    assert stats["episodes"] == 2
+    monitored = db.list_monitored()
+    assert len(monitored) == 1
+    assert monitored[0]["title"] == "Show"
+    assert monitored[0]["tmdb_id"] == 10
+    assert db.episode_state(10, 1, 1) == "imported"
+    assert db.episode_state(10, 1, 2) == "imported"
+    # episodes not on disk stay untouched (still monitored as missing)
+    assert db.episode_state(10, 1, 3) is None
+    db.close()
+
+
+def test_sync_disk_library_survives_offline_metadata(tmp_path, monkeypatch):
+    """R3.1: an unreachable TVMaze must not break startup scanning."""
+    cfg = make_cfg(tmp_path)
+    season = tmp_path / "downloads" / "tv-shows" / "Show (2020)" / "Season 01"
+    season.mkdir(parents=True)
+    (season / "Show - S01E01 - A.mkv").write_bytes(b"a" * 128)
+
+    class OfflineTv:
+        def __init__(self, cfg=None):
+            pass
+
+        def search_tv(self, query):
+            raise RuntimeError("tvmaze offline")
+
+    monkeypatch.setattr(pipeline, "TvmazeClient", OfflineTv)
+    db = pipeline._db(cfg)
+
+    stats = pipeline.sync_disk_library(cfg, db)
+
+    assert stats["shows"] == 1
+    assert stats["monitored"] == 0
+    assert db.list_monitored() == []
+    db.close()
+
+
+def test_check_media_availability_movie(tmp_path):
+    """R3.2: availability is resolved from the disk library."""
+    cfg = make_cfg(tmp_path)
+    folder = tmp_path / "downloads" / "movies" / "Inception (2010)"
+    folder.mkdir(parents=True)
+    media = folder / "Inception (2010).mkv"
+    media.write_bytes(b"x" * 512)
+
+    hit = pipeline.check_media_availability(cfg, media_type="movie", title="Inception", year=2010)
+    assert hit["in_library"] is True
+    assert hit["status"] == "available"
+    assert hit["path"] == str(media)
+
+    miss = pipeline.check_media_availability(
+        cfg, media_type="movie", title="Inception", year=2011
+    )
+    assert miss["in_library"] is False
+    assert miss["status"] is None
+
+    by_imdb = pipeline.check_media_availability(
+        cfg, media_type="movie", title="Something Else", imdb_id="tt1375666"
+    )
+    assert by_imdb["in_library"] is False  # not recorded in the DB yet
+
+
+def test_check_media_availability_queued_download(tmp_path):
+    """A movie still downloading reports 'queued' rather than available."""
+    cfg = make_cfg(tmp_path)
+    db = pipeline._db(cfg)
+    db.add_download(
+        "q" * 40, media_type="movie", title="Inception", year=2010, state="downloading"
+    )
+    db.close()
+
+    res = pipeline.check_media_availability(cfg, media_type="movie", title="Inception", year=2010)
+    assert res["in_library"] is False
+    assert res["status"] == "queued"
+
+
+def test_check_media_availability_tv_episodes_and_monitoring(tmp_path):
+    cfg = make_cfg(tmp_path)
+    season = tmp_path / "downloads" / "tv-shows" / "Show (2020)" / "Season 01"
+    season.mkdir(parents=True)
+    (season / "Show - S01E01 - A.mkv").write_bytes(b"a" * 128)
+
+    db = pipeline._db(cfg)
+    db.add_monitored(10, "Show", "tt10", "Returning Series", None)
+    db.close()
+
+    show = pipeline.check_media_availability(cfg, media_type="tv", title="Show")
+    assert show["in_library"] is True
+    assert show["status"] == "partial"  # only some episodes are on disk
+    assert show["monitored"] is True
+    assert show["available_seasons"] == {"1": [1]}
+
+    present = pipeline.check_media_availability(
+        cfg, media_type="tv", title="Show", season=1, episode=1
+    )
+    assert present["in_library"] is True and present["status"] == "available"
+
+    missing = pipeline.check_media_availability(
+        cfg, media_type="tv", title="Show", season=1, episode=5
+    )
+    assert missing["in_library"] is False
+    assert missing["status"] == "monitored"
+    assert missing["monitored"] is True
+
+
+def test_check_media_availability_tv_without_disk_or_db(tmp_path):
+    cfg = make_cfg(tmp_path)
+    res = pipeline.check_media_availability(cfg, media_type="tv", title="Nothing Here")
+    assert res["in_library"] is False
+    assert res["status"] is None
+    assert res["monitored"] is False
+
+
 def test_check_disk_space(tmp_path, monkeypatch):
     from arr.pipeline import check_disk_space
 
