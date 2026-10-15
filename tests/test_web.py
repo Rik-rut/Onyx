@@ -26,6 +26,13 @@ def client(test_cfg: Config) -> TestClient:
     return TestClient(app)
 
 
+@pytest.fixture(autouse=True)
+def _no_real_daemon():
+    """Web tests must never require a locally running Transmission daemon."""
+    with patch("arr.pipeline.ensure_daemon", return_value=None):
+        yield
+
+
 def test_index_page(client: TestClient) -> None:
     resp = client.get("/")
     assert resp.status_code == 200

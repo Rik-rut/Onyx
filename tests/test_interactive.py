@@ -54,6 +54,18 @@ def mock_console():
     return Console(record=True, width=120)
 
 
+@pytest.fixture(autouse=True)
+def _no_real_daemon():
+    """TUI tests must not depend on a locally running Transmission daemon."""
+    with (
+        patch("arr.transmission.process.port_in_use", return_value=True),
+        patch("arr.transmission.process.ensure_daemon", return_value=None),
+        # daemon_view binds port_in_use at import time
+        patch("arr.interactive.daemon_view.port_in_use", return_value=True),
+    ):
+        yield
+
+
 def sample_release(idx: int = 0) -> Release:
     return Release(
         indexer="yts",
@@ -561,7 +573,11 @@ def test_interactive_tv_flow_specific_season(test_cfg, mock_console):
 # Main Application Loop & Ctrl+C Handling
 # =====================================================================
 def test_main_menu_exit(test_cfg, mock_console):
-    with patch("arr.interactive.app.prompt_text", side_effect=["0"]):
+    # prompt_confirm is patched so the daemon-cleanup question can never read stdin
+    with (
+        patch("arr.interactive.app.prompt_text", side_effect=["0"]),
+        patch("arr.interactive.app.prompt_confirm", return_value=False),
+    ):
         ret = run_interactive(test_cfg, mock_console)
         assert ret == 0
         assert "Goodbye" in mock_console.export_text()
