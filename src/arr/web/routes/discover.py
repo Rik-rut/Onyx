@@ -16,6 +16,7 @@ from fastapi import Query as FastQuery
 from arr.log import get_logger
 from arr.metadata.imdb import ImdbClient, ImdbError
 from arr.metadata.tvmaze import TvmazeClient
+from arr.metadata.yts import YtsCatalog
 from arr.web.routes.search import annotate_availability
 
 logger = get_logger("discover")
@@ -37,6 +38,10 @@ DISCOVER_GENRES = [
     "Sci-Fi",
     "Thriller",
 ]
+# Movies come from YTS, which has no Anime genre; TVMaze has one.
+MOVIE_GENRES = [g for g in DISCOVER_GENRES if g != "Anime"]
+GENRES_BY_TYPE = {"movie": MOVIE_GENRES, "tv": list(DISCOVER_GENRES)}
+PAGE_SIZE = 20
 
 
 def _safe(fn, *args, **kwargs) -> list[dict]:
@@ -76,6 +81,7 @@ async def get_discover(request: Request) -> dict[str, Any]:
             "trending_tv": trending_tv,
             "top_rated_movies": top_rated,
             "genres": DISCOVER_GENRES,
+            "genres_by_type": GENRES_BY_TYPE,
         }
     except Exception as e:
         logger.error(f"Discover homepage failed: {e}")
@@ -102,6 +108,40 @@ async def get_discover_genre(
     except Exception as e:
         logger.error(f"Genre browse failed for '{genre}': {e}")
         raise HTTPException(status_code=500, detail=f"Genre browse failed: {e}") from e
+
+
+@router.get("/discover/browse")
+async def get_discover_browse(
+    request: Request,
+    media_type: str = FastQuery("movie"),
+    genre: str | None = None,
+    page: int = FastQuery(1, ge=1),
+) -> dict[str, Any]:
+    """One page of an endless Discover list: movies from YTS, shows from TVMaze."""
+    cfg = request.app.state.cfg
+    kind = "tv" if str(media_type).lower() in ("tv", "show", "series") else "movie"
+    genre = genre or None
+    logger.info(f"Discover browse: {kind} genre={genre or 'all'} page={page}")
+    try:
+        if kind == "tv":
+            items, total = await asyncio.to_thread(
+                TvmazeClient(cfg).browse_tv, genre, page, PAGE_SIZE
+            )
+        else:
+            items, total = await asyncio.to_thread(
+                YtsCatalog(cfg).browse, genre=genre, page=page, limit=PAGE_SIZE
+            )
+    except Exception as e:
+        logger.error(f"Discover browse failed ({kind}, page {page}): {e}")
+        raise HTTPException(status_code=502, detail=f"Could not load titles: {e}") from e
+    annotated = await asyncio.to_thread(annotate_availability, cfg, items, kind)
+    return {
+        "media_type": kind,
+        "genre": genre or "",
+        "page": page,
+        "has_more": bool(items) and page * PAGE_SIZE < total,
+        "items": annotated,
+    }
 
 
 @router.get("/movie/{imdb_id}/details")

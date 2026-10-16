@@ -186,6 +186,18 @@ class ImdbClient:
         entries = _suggestion_items(self, query)
         return entries[0] if entries else None
 
+    def suggest_titles(self, query: str) -> list[dict]:
+        """Title candidates (id, title, year, poster) from the suggestion API only."""
+        return self._search_all_suggestions(query)
+
+    def poster_for_imdb_id(self, imdb_id: str) -> str:
+        """Cover art for one title from the suggestion API, which works without IMDb pages."""
+        for entry in _suggestion_items(self, imdb_id):
+            if entry.get("id") == imdb_id:
+                image = entry.get("i")
+                return str(image.get("imageUrl") or "") if isinstance(image, dict) else ""
+        return ""
+
     def _details_from_suggestion(self, imdb_id: str) -> dict | None:
         """Best-effort details when the title page cannot be scraped."""
         entry = self._suggestion_entry(imdb_id)

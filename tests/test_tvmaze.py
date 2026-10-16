@@ -258,6 +258,50 @@ def test_tv_by_genre_filters_and_ranks(tmp_path):
     assert all("Drama" in i["genres"] for i in items)
 
 
+def test_tv_by_genre_sci_fi_matches_tvmaze_science_fiction(tmp_path):
+    """The UI says "Sci-Fi"; TVMaze files those shows under "Science-Fiction"."""
+    with respx.mock:
+        respx.get(f"{BASE}/shows").mock(return_value=httpx.Response(200, json=CATALOG))
+        c = TvmazeClient(cfg(), cache_dir=tmp_path)
+        items = c.tv_by_genre("Sci-Fi", limit=5)
+
+    assert [i["id"] for i in items] == [3]
+
+
+def test_tv_by_genre_animation_uses_show_type(tmp_path):
+    """TVMaze has no Animation genre; animated shows are identified by their type."""
+    shows = [
+        {
+            "id": 10,
+            "name": "Animated Hit",
+            "type": "Animation",
+            "genres": ["Comedy"],
+            "weight": 50,
+            "rating": {"average": 8.0},
+            "image": None,
+            "externals": {},
+            "summary": "",
+        },
+        {
+            "id": 11,
+            "name": "Live Hit",
+            "type": "Scripted",
+            "genres": ["Comedy"],
+            "weight": 60,
+            "rating": {"average": 8.0},
+            "image": None,
+            "externals": {},
+            "summary": "",
+        },
+    ]
+    with respx.mock:
+        respx.get(f"{BASE}/shows").mock(return_value=httpx.Response(200, json=shows))
+        c = TvmazeClient(cfg(), cache_dir=tmp_path)
+        items = c.tv_by_genre("Animation", limit=5)
+
+    assert [i["id"] for i in items] == [10]
+
+
 def test_similar_shows_prefers_shared_genres(tmp_path):
     with respx.mock:
         respx.get(f"{BASE}/shows").mock(return_value=httpx.Response(200, json=CATALOG))

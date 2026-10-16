@@ -40,6 +40,18 @@ def degrade(query: str) -> None:
     )
 
 
+# Discover genre names that TVMaze spells differently. TVMaze has no Animation genre:
+# animated shows carry the show type "Animation" instead.
+_TV_GENRE_ALIASES = {"sci-fi": "science-fiction", "scifi": "science-fiction"}
+
+
+def _is_tv_genre(show: dict, wanted: str) -> bool:
+    wanted = _TV_GENRE_ALIASES.get(wanted, wanted)
+    if wanted == "animation":
+        return str(show.get("type") or "").lower() == "animation"
+    return any(wanted == g.lower() or wanted in g.lower() for g in show.get("genres") or [])
+
+
 class TvmazeClient:
     def __init__(self, cfg, cache_dir: Path | None = None):
         self.cfg = cfg
@@ -306,6 +318,7 @@ class TvmazeClient:
             "name": str(show.get("name") or ""),
             "year": _year(show.get("premiered")),
             "status": str(show.get("status") or ""),
+            "type": str(show.get("type") or ""),
             "genres": [str(g) for g in (show.get("genres") or [])],
             "weight": int(show.get("weight") or 0),
             "rating": (rating.get("average") if isinstance(rating, dict) else None),
@@ -331,17 +344,23 @@ class TvmazeClient:
         catalog = [self._catalog_item(s) for s in self.shows_catalog()]
         return [s for s in self._ranked(catalog) if s["title"]][:limit]
 
+    def browse_tv(self, genre: str | None, page: int, limit: int = 20) -> tuple[list[dict], int]:
+        """One page of the cached catalogue, most popular first, optionally in one genre."""
+        wanted = str(genre or "").strip().lower()
+        catalog = [self._catalog_item(s) for s in self.shows_catalog()]
+        if wanted:
+            catalog = [s for s in catalog if _is_tv_genre(s, wanted)]
+        ranked = self._ranked(catalog)
+        start = (max(1, page) - 1) * limit
+        return ranked[start : start + limit], len(ranked)
+
     def tv_by_genre(self, genre: str, limit: int = 20) -> list[dict]:
         """Shows in one genre, ranked by popularity."""
         wanted = str(genre or "").strip().lower()
         if not wanted:
             return []
         catalog = [self._catalog_item(s) for s in self.shows_catalog()]
-        matches = [
-            s
-            for s in catalog
-            if any(wanted == g.lower() or wanted in g.lower() for g in s["genres"])
-        ]
+        matches = [s for s in catalog if _is_tv_genre(s, wanted)]
         return self._ranked(matches)[:limit]
 
     def tv_show_summary(self, show_id: int) -> dict:

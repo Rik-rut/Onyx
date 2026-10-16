@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi import Query as FastQuery
+from pydantic import BeforeValidator
 
 from arr.core.models import MediaType
 from arr.core.parsing import explain
@@ -15,6 +16,17 @@ from arr.pipeline import check_media_availability, search_candidates
 
 logger = get_logger("search")
 router = APIRouter(prefix="/api", tags=["search"])
+
+
+def _blank_to_none(value: Any) -> Any:
+    """The UI sends `key=` for empty fields; an empty query value means "not given"."""
+    if isinstance(value, str) and not value.strip():
+        return None
+    return value
+
+
+OptionalInt = Annotated[int | None, BeforeValidator(_blank_to_none)]
+OptionalText = Annotated[str | None, BeforeValidator(_blank_to_none)]
 
 
 def _imdb_like(value: Any) -> str | None:
@@ -180,8 +192,8 @@ async def get_tv_details(request: Request, show_id: int) -> dict[str, Any]:
 async def get_movie_releases(
     request: Request,
     title: str = FastQuery(..., min_length=1),
-    year: int | None = None,
-    imdb_id: str | None = None,
+    year: OptionalInt = None,
+    imdb_id: OptionalText = None,
 ) -> list[dict[str, Any]]:
     cfg = request.app.state.cfg
     logger.info(f"Searching movie releases: '{title}' (year={year}, imdb_id={imdb_id})")
@@ -236,8 +248,8 @@ async def get_movie_releases(
 async def get_tv_releases(
     request: Request,
     title: str = FastQuery(..., min_length=1),
-    season: int | None = None,
-    episode: int | None = None,
+    season: OptionalInt = None,
+    episode: OptionalInt = None,
     pack: bool = False,
 ) -> list[dict[str, Any]]:
     cfg = request.app.state.cfg

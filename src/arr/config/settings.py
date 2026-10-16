@@ -27,7 +27,7 @@ DEFAULTS: dict = {
     "eztv_base_url": "https://eztv.re",
     "nyaa_base_url": "https://nyaa.si",
     "tvmaze_base_url": "https://api.tvmaze.com",
-    "tvmaze_catalog_pages": 4,
+    "tvmaze_catalog_pages": 12,
     "imdb_base_url": "https://www.imdb.com",
     "imdb_suggestion_base_url": "https://v3.sg.media-imdb.com/suggestion",
     "subscene_base_url": "https://subscene.com",
@@ -71,7 +71,7 @@ CONFIG_TEMPLATE = """\
 # Metadata / subtitle source base URLs (free or scraped; no API keys)
 tvmaze_base_url = "https://api.tvmaze.com"
 # TVMaze show-index pages cached locally (250 shows each) for Discover rankings
-tvmaze_catalog_pages = 4
+tvmaze_catalog_pages = 12
 imdb_base_url = "https://www.imdb.com"
 # IMDb suggestion JSON endpoint (fallback when the HTML search is bot-blocked)
 imdb_suggestion_base_url = "https://v3.sg.media-imdb.com/suggestion"

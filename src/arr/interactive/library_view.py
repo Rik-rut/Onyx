@@ -171,7 +171,7 @@ def get_library_shows(tv_dir: Path, cfg: Config) -> list[dict]:
                 clean_title = re.sub(r"\s*\(\d{4}\)", "", entry.name).strip().lower()
                 for s in db.list_monitored():
                     if s.get("title", "").strip().lower() == clean_title:
-                        for ep in db.episodes_for_series(s["series_id"]):
+                        for ep in db.episodes_for_series(s["tmdb_id"]):
                             if ep.get("monitored", True):
                                 monitored_eps.add(f"s{ep['season']:02d}e{ep['episode']:02d}")
                         break

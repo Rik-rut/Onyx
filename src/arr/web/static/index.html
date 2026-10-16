@@ -135,17 +135,20 @@
       <!-- TAB 1: SEARCH & DISCOVER -->
       <section v-if="activeTab === 'search'" class="space-y-6">
         <h2 class="sr-only">Search and discover</h2>
-        <div class="bg-darkcard border border-slate-800 p-4 sm:p-6 rounded-xl shadow-md">
-          <div class="flex flex-col sm:flex-row gap-3">
-            <div class="inline-flex rounded-lg border border-slate-700 p-1 bg-slate-900 self-start" role="group" aria-label="Media type">
-              <button @click="searchType = 'movie'" :aria-pressed="searchType === 'movie'" :class="searchType === 'movie' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'" class="px-3 py-1.5 rounded-md text-sm font-medium transition">
-                Movies
-              </button>
-              <button @click="searchType = 'tv'" :aria-pressed="searchType === 'tv'" :class="searchType === 'tv' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'" class="px-3 py-1.5 rounded-md text-sm font-medium transition">
-                TV Shows
-              </button>
-            </div>
+        <div class="bg-darkcard border border-slate-800 p-4 sm:p-6 rounded-xl shadow-md space-y-4">
+          <!-- One media-type choice drives Discover and search alike -->
+          <div class="inline-flex w-full sm:w-auto rounded-2xl border border-slate-700 p-1.5 bg-slate-900 gap-1.5" role="group" aria-label="Media type">
+            <button @click="searchType = 'movie'" :aria-pressed="searchType === 'movie'" :class="searchType === 'movie' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/40' : 'text-slate-400 hover:text-white hover:bg-slate-800'" class="flex-1 sm:flex-none flex items-center justify-center gap-2.5 px-6 sm:px-10 py-3 rounded-xl text-base font-bold transition">
+              <svg aria-hidden="true" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 4v16M17 4v16M3 8h4m10 0h4M3 12h18M3 16h4m10 0h4M4 20h16a1 1 0 001-1V5a1 1 0 00-1-1H4a1 1 0 00-1 1v14a1 1 0 001 1z"/></svg>
+              Movies
+            </button>
+            <button @click="searchType = 'tv'" :aria-pressed="searchType === 'tv'" :class="searchType === 'tv' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/40' : 'text-slate-400 hover:text-white hover:bg-slate-800'" class="flex-1 sm:flex-none flex items-center justify-center gap-2.5 px-6 sm:px-10 py-3 rounded-xl text-base font-bold transition">
+              <svg aria-hidden="true" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16v11H4zM8 21h8M12 17v4"/></svg>
+              TV Shows
+            </button>
+          </div>
 
+          <div class="flex flex-col sm:flex-row gap-3">
             <div class="flex-1 relative">
               <label for="searchInput" class="sr-only">Search query</label>
               <input id="searchInput" v-model="searchQuery" @keyup.enter="performSearch" type="text"
@@ -218,57 +221,8 @@
               </div>
             </div>
 
-            <!-- Browse by Genre Chips -->
-            <div>
-              <div class="flex items-center justify-between mb-3">
-                <h2 class="font-bold text-sm sm:text-base text-white">Browse by Genre</h2>
-                <div class="inline-flex rounded-lg border border-slate-700 p-0.5 bg-slate-900" role="group" aria-label="Genre media type">
-                  <button @click="genreType = 'movie'; genreFilter && loadGenre(genreFilter)" :aria-pressed="genreType === 'movie'"
-                          :class="genreType === 'movie' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'"
-                          class="px-2.5 py-1 rounded-md text-[11px] font-semibold transition">Movies</button>
-                  <button @click="genreType = 'tv'; genreFilter && loadGenre(genreFilter)" :aria-pressed="genreType === 'tv'"
-                          :class="genreType === 'tv' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'"
-                          class="px-2.5 py-1 rounded-md text-[11px] font-semibold transition">TV</button>
-                </div>
-              </div>
-              <div class="flex flex-wrap gap-2" role="group" aria-label="Genres">
-                <button v-for="g in discover.genres" :key="g" @click="loadGenre(g)" :aria-pressed="genreFilter === g"
-                        :class="genreFilter === g ? 'bg-indigo-600 text-white border-indigo-500' : 'bg-slate-900/70 text-slate-300 hover:text-white border-slate-700'"
-                        class="px-3 py-1.5 rounded-full border text-xs font-medium transition">
-                  {{ g }}
-                </button>
-                <button v-if="genreFilter" @click="clearGenre" class="px-3 py-1.5 rounded-full border border-slate-700 text-xs font-medium text-slate-400 hover:text-white transition">
-                  Clear
-                </button>
-              </div>
-
-              <div v-if="loadingGenre" class="mt-4 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3" aria-hidden="true">
-                <div v-for="n in 5" :key="n" class="aspect-[2/3] rounded-xl bg-darkcard border border-slate-800 animate-pulse"></div>
-              </div>
-              <div v-else-if="genreFilter && genreItems.length" class="mt-4">
-                <h3 class="text-xs font-semibold text-slate-400 mb-2">{{ genreType === 'movie' ? 'Movies' : 'TV Shows' }} · {{ genreFilter }}</h3>
-                <div class="flex gap-3 overflow-x-auto no-scrollbar pb-2">
-                  <article v-for="item in genreItems" :key="item.imdb_id || item.id" class="w-32 sm:w-36 shrink-0 group">
-                    <button @click="openDiscoverItem(item)" class="block w-full text-left">
-                      <div class="aspect-[2/3] rounded-xl overflow-hidden bg-slate-800 border border-slate-800 group-hover:border-indigo-500 transition relative">
-                        <img v-if="item.poster" :src="item.poster" :alt="`Poster for ${item.title}`" @error="item.poster = ''" class="w-full h-full object-cover group-hover:scale-105 transition duration-300">
-                        <div v-else class="w-full h-full flex items-center justify-center text-slate-600 font-bold text-[10px] p-3 text-center">{{ item.title }}</div>
-                        <span v-if="item.library_status" :class="libraryBadgeClass(item.library_status)"
-                              class="absolute top-1.5 left-1.5 text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded">
-                          {{ libraryBadgeLabel(item.library_status) }}
-                        </span>
-                      </div>
-                      <h4 class="mt-1.5 text-[11px] font-semibold text-slate-200 line-clamp-1 group-hover:text-indigo-300 transition">{{ item.title }}</h4>
-                      <p class="text-[10px] text-slate-500 font-mono">{{ item.year || '' }}<span v-if="item.rating"> · ★ {{ item.rating }}</span></p>
-                    </button>
-                  </article>
-                </div>
-              </div>
-              <div v-else-if="genreFilter" class="mt-4 text-xs text-slate-500">No titles found in that genre right now.</div>
-            </div>
-
             <!-- Trending Movies Rail -->
-            <div v-if="discover.trending_movies.length">
+            <div v-if="searchType === 'movie' && discover.trending_movies.length">
               <h2 class="font-bold text-sm sm:text-base text-white mb-3">Trending Movies</h2>
               <div class="flex gap-3 overflow-x-auto no-scrollbar pb-2">
                 <article v-for="item in discover.trending_movies" :key="item.imdb_id" class="w-32 sm:w-36 shrink-0 group">
@@ -290,7 +244,7 @@
             </div>
 
             <!-- Trending TV Rail -->
-            <div v-if="discover.trending_tv.length">
+            <div v-if="searchType === 'tv' && discover.trending_tv.length">
               <h2 class="font-bold text-sm sm:text-base text-white mb-3">Trending TV Shows</h2>
               <div class="flex gap-3 overflow-x-auto no-scrollbar pb-2">
                 <article v-for="item in discover.trending_tv" :key="item.id" class="w-32 sm:w-36 shrink-0 group">
@@ -312,7 +266,7 @@
             </div>
 
             <!-- Top Rated Rail -->
-            <div v-if="discover.top_rated_movies.length">
+            <div v-if="searchType === 'movie' && discover.top_rated_movies.length">
               <h2 class="font-bold text-sm sm:text-base text-white mb-3">Top Rated Movies</h2>
               <div class="flex gap-3 overflow-x-auto no-scrollbar pb-2">
                 <article v-for="item in discover.top_rated_movies" :key="item.imdb_id" class="w-32 sm:w-36 shrink-0 group">
@@ -333,6 +287,60 @@
               </div>
             </div>
           </template>
+
+          <!-- Browse by Genre: the chips filter the endless list below -->
+          <div>
+            <div class="flex items-center justify-between mb-3">
+              <h2 class="font-bold text-sm sm:text-base text-white">Browse by Genre</h2>
+              <span class="text-[11px] text-slate-500">{{ searchType === 'movie' ? 'Movies' : 'TV shows' }}</span>
+            </div>
+            <div class="flex flex-wrap gap-2" role="group" aria-label="Genres">
+              <button v-for="g in genresForType" :key="g" @click="loadGenre(g)" :aria-pressed="genreFilter === g"
+                      :class="genreFilter === g ? 'bg-indigo-600 text-white border-indigo-500' : 'bg-slate-900/70 text-slate-300 hover:text-white border-slate-700'"
+                      class="px-3 py-1.5 rounded-full border text-xs font-medium transition">
+                {{ g }}
+              </button>
+              <button v-if="genreFilter" @click="clearGenre" class="px-3 py-1.5 rounded-full border border-slate-700 text-xs font-medium text-slate-400 hover:text-white transition">
+                Clear
+              </button>
+            </div>
+          </div>
+
+          <!-- Endless browse: pages load as you scroll (movies via YTS, shows via TVMaze) -->
+          <div class="space-y-4">
+            <h2 class="font-bold text-sm sm:text-base text-white">
+              {{ searchType === 'movie' ? 'All movies' : 'All TV shows' }}<span v-if="genreFilter" class="text-indigo-300 font-semibold"> · {{ genreFilter }}</span>
+            </h2>
+            <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3 sm:gap-4" data-testid="browse-grid">
+              <article v-for="item in browseItems" :key="browseKey(item)" class="group">
+                <button @click="openDiscoverItem(item)" class="block w-full text-left">
+                  <div class="aspect-[2/3] rounded-xl overflow-hidden bg-slate-800 border border-slate-800 group-hover:border-indigo-500 transition relative">
+                    <img v-if="item.poster" :src="item.poster" :alt="`Poster for ${item.title}`" loading="lazy" @error="item.poster = ''" class="w-full h-full object-cover group-hover:scale-105 transition duration-300">
+                    <div v-else class="w-full h-full flex items-center justify-center text-slate-600 font-bold text-xs p-3 text-center">{{ item.title }}</div>
+                    <span v-if="item.rating" class="absolute top-1.5 right-1.5 text-[10px] font-bold px-1.5 py-0.5 rounded bg-black/75 text-amber-300">★ {{ item.rating }}</span>
+                    <span v-if="item.library_status" :class="libraryBadgeClass(item.library_status)"
+                          class="absolute bottom-1.5 left-1.5 text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded">
+                      {{ libraryBadgeLabel(item.library_status) }}
+                    </span>
+                  </div>
+                  <h3 class="mt-1.5 text-xs font-semibold text-slate-200 line-clamp-1 group-hover:text-indigo-300 transition">{{ item.title }}</h3>
+                  <p class="text-[10px] text-slate-500 font-mono">{{ item.year || '' }}</p>
+                </button>
+              </article>
+            </div>
+
+            <div v-if="browseLoading" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3 sm:gap-4" aria-hidden="true">
+              <div v-for="n in 6" :key="n" class="aspect-[2/3] rounded-xl bg-darkcard border border-slate-800 animate-pulse"></div>
+            </div>
+            <div v-if="browseError" class="text-center py-6 text-sm" role="alert">
+              <p class="text-rose-400 font-medium">{{ browseError }}</p>
+              <button @click="retryBrowse" class="mt-2 text-xs font-semibold text-indigo-400 hover:text-indigo-300 underline underline-offset-2">Try again</button>
+            </div>
+            <p v-else-if="!browseLoading && !browseItems.length" class="text-center py-8 text-xs text-slate-500">
+              No titles found{{ genreFilter ? ' in ' + genreFilter : '' }}.
+            </p>
+            <div ref="browseSentinel" class="h-8" aria-hidden="true"></div>
+          </div>
         </div>
 
         <!-- Search Loading Skeletons -->
@@ -435,8 +443,8 @@
                       {{ t.status }}
                     </span>
                     <span>{{ formatBytes(t.total_size) }}</span>
-                    <span aria-label="Download speed">â†“ {{ formatSpeed(t.rate_download) }}</span>
-                    <span aria-label="Upload speed">â†‘ {{ formatSpeed(t.rate_upload) }}</span>
+                    <span aria-label="Download speed">↓ {{ formatSpeed(t.rate_download) }}</span>
+                    <span aria-label="Upload speed">↑ {{ formatSpeed(t.rate_upload) }}</span>
                     <span v-if="t.eta > 0">ETA: {{ formatEta(t.eta) }}</span>
                   </div>
                 </div>
@@ -444,10 +452,10 @@
                 <!-- Action & Priority Controls (R22.3) -->
                 <div class="flex items-center space-x-1.5 self-end md:self-center mt-2 md:mt-0" role="group" :aria-label="`Actions for ${t.name}`">
                   <button @click="priorityUp(t.id)" :aria-label="`Increase priority of ${t.name}`" title="Move up in the download priority queue" class="px-2 py-1 min-w-[32px] bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded text-xs font-bold transition">
-                    <span aria-hidden="true">â†‘</span>
+                    <span aria-hidden="true">↑</span>
                   </button>
                   <button @click="priorityDown(t.id)" :aria-label="`Decrease priority of ${t.name}`" title="Move down in the download priority queue" class="px-2 py-1 min-w-[32px] bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded text-xs font-bold transition">
-                    <span aria-hidden="true">â†“</span>
+                    <span aria-hidden="true">↓</span>
                   </button>
                   <button v-if="t.status_code === 0" @click="resumeTorrent(t.id)" :aria-label="`Resume ${t.name}`" class="px-2.5 py-1 bg-emerald-600/20 hover:bg-emerald-600 text-emerald-400 hover:text-white rounded text-xs font-semibold transition">
                     Resume
@@ -540,37 +548,61 @@
           <button @click="loadLibrary" class="mt-3 text-xs font-semibold text-blue-400 hover:text-blue-300 underline underline-offset-2">Try again</button>
         </div>
 
-        <div v-else class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <!-- Movies Library -->
-          <div class="bg-darkcard border border-slate-800 rounded-xl p-5 shadow-md">
-            <h3 class="font-bold text-sm sm:text-base text-white mb-3 flex items-center justify-between">
-              <span>Movies ({{ library.movies.length }})</span>
-            </h3>
-            <div v-if="library.movies.length" class="divide-y divide-slate-800 max-h-96 overflow-y-auto">
-              <div v-for="m in library.movies" :key="m.title" class="py-2.5 flex items-center justify-between gap-3 text-xs">
-                <div class="min-w-0">
-                  <p class="font-medium text-slate-200 truncate" :title="m.title">{{ m.title }}</p>
-                  <p class="text-[11px] text-slate-500 mt-0.5">{{ m.file_count }} file{{ m.file_count === 1 ? '' : 's' }} Â· {{ (m.primary_ext || '').replace('.', '').toUpperCase() || 'N/A' }}</p>
+        <div v-else class="space-y-8">
+          <!-- Movies: cover art, seeding state and per-title actions -->
+          <div>
+            <h3 class="font-bold text-sm sm:text-base text-white mb-3">Movies ({{ library.movies.length }})</h3>
+            <div v-if="library.movies.length" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3 sm:gap-4">
+              <article v-for="m in library.movies" :key="m.path" class="bg-darkcard border border-slate-800 rounded-xl overflow-hidden flex flex-col">
+                <div class="aspect-[2/3] bg-slate-800 relative">
+                  <img v-if="m.poster" :src="m.poster" :alt="`Cover for ${m.title}`" loading="lazy" @error="m.poster = ''" class="w-full h-full object-cover">
+                  <div v-else class="w-full h-full flex items-center justify-center text-slate-500 font-bold text-xs p-3 text-center">{{ m.title }}</div>
+                  <span v-if="m.year" class="absolute top-1.5 right-1.5 px-1.5 py-0.5 rounded bg-black/70 text-[10px] font-semibold text-white">{{ m.year }}</span>
+                  <span v-if="m.seeding" class="absolute bottom-1.5 left-1.5 text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded bg-sky-500/30 text-sky-200">Seeding</span>
                 </div>
-                <span class="text-slate-300 font-mono whitespace-nowrap">{{ m.size_mb }} MB</span>
-              </div>
+                <div class="p-3 flex-1 flex flex-col justify-between gap-2">
+                  <div class="min-w-0">
+                    <h4 class="font-semibold text-xs text-white line-clamp-2" :title="m.title">{{ m.title }}</h4>
+                    <p class="text-[11px] text-slate-500 mt-0.5 font-mono">{{ m.size_mb }} MB</p>
+                  </div>
+                  <div class="flex flex-wrap gap-1.5">
+                    <button v-if="m.seeding" @click="stopSeeding(m, 'movie')" :aria-label="`Stop seeding ${m.title}`" class="flex-1 text-[11px] font-semibold px-2 py-1.5 rounded bg-sky-600/20 hover:bg-sky-600 text-sky-300 hover:text-white transition">Stop seeding</button>
+                    <button @click="deleteLibraryItem(m, 'movie')" :aria-label="`Delete ${m.title}`" class="flex-1 text-[11px] font-semibold px-2 py-1.5 rounded border border-rose-600/40 bg-rose-600/10 hover:bg-rose-600 text-rose-400 hover:text-white transition">Delete</button>
+                  </div>
+                </div>
+              </article>
             </div>
             <div v-else class="text-center py-10 text-slate-500 text-xs">No movies detected in the library folder yet.</div>
           </div>
 
-          <!-- TV Shows Library -->
-          <div class="bg-darkcard border border-slate-800 rounded-xl p-5 shadow-md">
-            <h3 class="font-bold text-sm sm:text-base text-white mb-3 flex items-center justify-between">
-              <span>TV Shows ({{ library.shows.length }})</span>
-            </h3>
-            <div v-if="library.shows.length" class="divide-y divide-slate-800 max-h-96 overflow-y-auto">
-              <div v-for="s in library.shows" :key="s.title" class="py-2.5 flex items-center justify-between gap-3 text-xs">
-                <div class="min-w-0">
-                  <p class="font-medium text-slate-200 truncate" :title="s.title">{{ s.title }}</p>
-                  <p class="text-[11px] text-slate-500 mt-0.5">{{ s.episodes_count }} episodes Â· {{ s.seasons_count }} season{{ s.seasons_count === 1 ? '' : 's' }}</p>
+          <!-- TV shows: cover art, tracking state and per-show actions -->
+          <div>
+            <h3 class="font-bold text-sm sm:text-base text-white mb-3">TV Shows ({{ library.shows.length }})</h3>
+            <div v-if="library.shows.length" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3 sm:gap-4">
+              <article v-for="s in library.shows" :key="s.path" class="bg-darkcard border border-slate-800 rounded-xl overflow-hidden flex flex-col">
+                <div class="aspect-[2/3] bg-slate-800 relative">
+                  <img v-if="s.poster" :src="s.poster" :alt="`Cover for ${s.title}`" loading="lazy" @error="s.poster = ''" class="w-full h-full object-cover">
+                  <div v-else class="w-full h-full flex items-center justify-center text-slate-500 font-bold text-xs p-3 text-center">{{ s.title }}</div>
+                  <span v-if="s.year" class="absolute top-1.5 right-1.5 px-1.5 py-0.5 rounded bg-black/70 text-[10px] font-semibold text-white">{{ s.year }}</span>
+                  <div class="absolute bottom-1.5 left-1.5 right-1.5 flex flex-wrap gap-1">
+                    <span v-if="s.monitored" class="text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded bg-indigo-500/40 text-indigo-100">Monitored</span>
+                    <span v-if="s.missing && s.missing.length" class="text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded bg-amber-500/40 text-amber-100">{{ s.missing.length }} missing</span>
+                    <span v-if="s.seeding" class="text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded bg-sky-500/40 text-sky-100">Seeding</span>
+                  </div>
                 </div>
-                <span v-if="s.monitored_count" class="text-[11px] font-semibold px-2 py-0.5 rounded bg-blue-500/10 text-blue-400 whitespace-nowrap">Monitored</span>
-              </div>
+                <div class="p-3 flex-1 flex flex-col justify-between gap-2">
+                  <div class="min-w-0">
+                    <h4 class="font-semibold text-xs text-white line-clamp-2" :title="s.title">{{ s.title }}</h4>
+                    <p class="text-[11px] text-slate-500 mt-0.5">{{ s.episodes_count }} episodes · {{ s.seasons_count }} season{{ s.seasons_count === 1 ? '' : 's' }}</p>
+                  </div>
+                  <div class="flex flex-wrap gap-1.5">
+                    <button v-if="s.monitored" @click="untrackShow(s)" :aria-label="`Stop tracking ${s.title}`" class="flex-1 text-[11px] font-semibold px-2 py-1.5 rounded bg-indigo-600/20 hover:bg-indigo-600 text-indigo-300 hover:text-white transition">Untrack</button>
+                    <button v-else @click="trackShow(s)" :aria-label="`Track ${s.title}`" class="flex-1 text-[11px] font-semibold px-2 py-1.5 rounded bg-indigo-600 hover:bg-indigo-500 text-white transition">Track</button>
+                    <button v-if="s.seeding" @click="stopSeeding(s, 'tv')" :aria-label="`Stop seeding ${s.title}`" class="flex-1 text-[11px] font-semibold px-2 py-1.5 rounded bg-sky-600/20 hover:bg-sky-600 text-sky-300 hover:text-white transition">Stop seeding</button>
+                    <button @click="deleteLibraryItem(s, 'tv')" :aria-label="`Delete ${s.title}`" class="flex-1 text-[11px] font-semibold px-2 py-1.5 rounded border border-rose-600/40 bg-rose-600/10 hover:bg-rose-600 text-rose-400 hover:text-white transition">Delete</button>
+                  </div>
+                </div>
+              </article>
             </div>
             <div v-else class="text-center py-10 text-slate-500 text-xs">No TV shows detected in the library folder yet.</div>
           </div>
@@ -793,7 +825,7 @@
                 <button @click="monitorThisShow" :disabled="isMonitored" :aria-pressed="isMonitored"
                         :class="isMonitored ? 'bg-emerald-600/20 text-emerald-400 cursor-default' : 'bg-blue-600/20 hover:bg-blue-600 text-blue-400 hover:text-white'"
                         class="px-2.5 py-1 rounded text-xs font-semibold whitespace-nowrap transition">
-                  {{ isMonitored ? 'âœ“ Monitoring' : '+ Monitor' }}
+                  {{ isMonitored ? '✓ Monitoring' : '+ Monitor' }}
                 </button>
               </div>
 
@@ -869,7 +901,7 @@
                    class="py-3 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
                 <div class="flex-1 min-w-0">
                   <div class="flex items-center flex-wrap gap-2">
-                    <span :class="scoreClass(r.score)" :title="`Match score ${r.score}: higher means a better fit for your quality and seeder preferences`" class="px-2 py-0.5 rounded text-[11px] font-bold">{{ scoreLabel(r.score) }} Â· {{ r.score }}</span>
+                    <span :class="scoreClass(r.score)" :title="`Match score ${r.score}: higher means a better fit for your quality and seeder preferences`" class="px-2 py-0.5 rounded text-[11px] font-bold">{{ scoreLabel(r.score) }} · {{ r.score }}</span>
                     <span class="text-[11px] font-semibold px-2 py-0.5 rounded bg-slate-800 text-slate-300 uppercase">{{ r.indexer }}</span>
                     <span v-if="r.resolution" class="text-[11px] font-semibold px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-400">{{ r.resolution }}</span>
                     <span v-if="r.codec" class="text-[11px] text-slate-400">{{ r.codec }}</span>
@@ -936,13 +968,20 @@
         const searchError = ref('');
 
         // Discover homepage state (R4.3)
-        const discover = ref({ spotlight: null, trending_movies: [], trending_tv: [], top_rated_movies: [], genres: [] });
+        const discover = ref({ spotlight: null, trending_movies: [], trending_tv: [], top_rated_movies: [], genres: [], genres_by_type: {} });
         const loadingDiscover = ref(false);
         const discoverError = ref('');
         const genreFilter = ref('');
-        const genreType = ref('movie');
-        const genreItems = ref([]);
-        const loadingGenre = ref(false);
+
+        // Endless browse grid: the next page loads when the user scrolls near its end.
+        const browseItems = ref([]);
+        const browseLoading = ref(false);
+        const browseError = ref('');
+        const browseHasMore = ref(true);
+        const browsePage = ref(0);
+        const browseSentinel = ref(null);
+        let browseToken = 0;
+        let browseObserver = null;
         // Detail modal enrichment (R4.2/R4.3)
         const modalType = ref('movie');
         const detailInfo = ref(null);
@@ -1027,13 +1066,31 @@
           return 'bg-emerald-900 border-emerald-700 text-emerald-100';
         }
 
+        // FastAPI reports bad input as a list of {loc, msg} objects; show them as text.
+        function errorText(detail, status) {
+          if (Array.isArray(detail)) {
+            return detail.map((item) => {
+              if (typeof item === 'string') return item;
+              const field = (item.loc || []).filter((part) => part !== 'body' && part !== 'query' && part !== 'path').join('.');
+              const msg = item.msg || 'invalid value';
+              return field ? `${field}: ${msg}` : msg;
+            }).join('; ');
+          }
+          if (typeof detail === 'string' && detail) return detail;
+          return `Request failed (${status})`;
+        }
+
+        // Only an unreachable backend or a server error should raise the outage banner.
+        function isBackendFailure(e) {
+          return !e.status || e.status >= 500;
+        }
+
         async function apiFetch(url, options) {
           const res = await fetch(url, options);
           let body = null;
           try { body = await res.json(); } catch (e) { body = null; }
           if (!res.ok) {
-            const detail = body && (body.detail || body.message);
-            const err = new Error(detail || `Request failed (${res.status})`);
+            const err = new Error(errorText(body && (body.detail || body.message), res.status));
             err.status = res.status;
             throw err;
           }
@@ -1140,7 +1197,7 @@
         }
 
         function formatEta(seconds) {
-          if (seconds < 0) return 'âˆž';
+          if (seconds < 0) return '∞';
           if (seconds < 60) return seconds + 's';
           if (seconds < 3600) return Math.floor(seconds / 60) + 'm';
           return (seconds / 3600).toFixed(1) + 'h';
@@ -1209,6 +1266,11 @@
           return Boolean(tv.in_library || info.in_library || (selectedItem.value && selectedItem.value.in_library));
         });
 
+        const genresForType = computed(() => {
+          const byType = discover.value.genres_by_type || {};
+          return byType[searchType.value] || discover.value.genres || [];
+        });
+
         const spotlightTypeLabel = computed(() => {
           const item = discover.value.spotlight || {};
           return item.media_type === 'tv' ? 'TV Show' : 'Movie';
@@ -1250,7 +1312,7 @@
             markBackend(true);
           } catch (e) {
             searchError.value = e.message;
-            markBackend(false);
+            if (isBackendFailure(e)) markBackend(false);
           } finally {
             searching.value = false;
           }
@@ -1277,39 +1339,37 @@
           try {
             const data = await apiFetch('/api/discover');
             discover.value = {
-              spotlight: (data && data.spotlight) || null,
+              spotlight: null,
               trending_movies: (data && data.trending_movies) || [],
               trending_tv: (data && data.trending_tv) || [],
               top_rated_movies: (data && data.top_rated_movies) || [],
               genres: (data && data.genres) || [],
+              genres_by_type: (data && data.genres_by_type) || {},
             };
+            syncSpotlight();
             markBackend(true);
           } catch (e) {
             discoverError.value = 'Could not load Discover: ' + e.message;
-            markBackend(false);
+            if (isBackendFailure(e)) markBackend(false);
           } finally {
             loadingDiscover.value = false;
           }
         }
 
-        async function loadGenre(genre) {
+        // The hero spotlight shows the top title of the selected media type.
+        function syncSpotlight() {
+          const d = discover.value;
+          d.spotlight = searchType.value === 'tv'
+            ? (d.trending_tv[0] || null)
+            : (d.trending_movies[0] || d.top_rated_movies[0] || null);
+        }
+
+        function loadGenre(genre) {
           genreFilter.value = genre;
-          loadingGenre.value = true;
-          try {
-            const data = await apiFetch(`/api/discover/genre?genre=${encodeURIComponent(genre)}&media_type=${genreType.value}`);
-            genreItems.value = (data && data.items) || [];
-            markBackend(true);
-          } catch (e) {
-            genreItems.value = [];
-            showToast('Genre browse failed: ' + e.message, 'error');
-          } finally {
-            loadingGenre.value = false;
-          }
         }
 
         function clearGenre() {
           genreFilter.value = '';
-          genreItems.value = [];
         }
 
         function backToDiscover() {
@@ -1317,6 +1377,55 @@
           searchResults.value = [];
           searchQuery.value = '';
           if (!discover.value.trending_movies.length) loadDiscover();
+          if (!browseItems.value.length) loadMoreBrowse();
+        }
+
+        // ------------------- Endless browse grid -------------------
+
+        function browseKey(item) {
+          return `${item.media_type || searchType.value}:${item.imdb_id || item.id}`;
+        }
+
+        function resetBrowse() {
+          browseToken += 1;
+          browseItems.value = [];
+          browsePage.value = 0;
+          browseHasMore.value = true;
+          browseLoading.value = false;
+          browseError.value = '';
+          if (!searched.value) loadMoreBrowse();
+        }
+
+        async function loadMoreBrowse() {
+          if (browseLoading.value || !browseHasMore.value) return;
+          const token = browseToken;
+          const page = browsePage.value + 1;
+          browseLoading.value = true;
+          try {
+            const params = new URLSearchParams({ media_type: searchType.value, page: String(page) });
+            if (genreFilter.value) params.set('genre', genreFilter.value);
+            const data = await apiFetch(`/api/discover/browse?${params}`);
+            if (token !== browseToken) return;
+            const seen = new Set(browseItems.value.map(browseKey));
+            const fresh = (data.items || []).filter((item) => !seen.has(browseKey(item)));
+            browseItems.value = [...browseItems.value, ...fresh];
+            browsePage.value = page;
+            browseHasMore.value = Boolean(data.has_more) && fresh.length > 0;
+            markBackend(true);
+          } catch (e) {
+            if (token !== browseToken) return;
+            browseError.value = 'Could not load titles: ' + e.message;
+            browseHasMore.value = false;
+            if (isBackendFailure(e)) markBackend(false);
+          } finally {
+            if (token === browseToken) browseLoading.value = false;
+          }
+        }
+
+        function retryBrowse() {
+          browseError.value = '';
+          browseHasMore.value = true;
+          loadMoreBrowse();
         }
 
         function openDiscoverItem(item) {
@@ -1393,7 +1502,7 @@
             markBackend(true);
           } catch (e) {
             showToast('Could not load show details: ' + e.message, 'error');
-            markBackend(false);
+            if (isBackendFailure(e)) markBackend(false);
           } finally {
             loadingTvDetails.value = false;
           }
@@ -1416,6 +1525,15 @@
           fetchReleases();
         }
 
+        // Only fields that have a value are sent: an empty `episode=` is rejected with a 422.
+        function releaseQuery(params) {
+          const query = new URLSearchParams();
+          Object.entries(params).forEach(([key, value]) => {
+            if (value !== null && value !== undefined && value !== '') query.set(key, String(value));
+          });
+          return query.toString();
+        }
+
         async function fetchReleases() {
           if (!selectedItem.value) return;
           loadingReleases.value = true;
@@ -1423,17 +1541,17 @@
           try {
             let url = '';
             if (modalType.value === 'movie') {
-              url = `/api/releases/movie?title=${encodeURIComponent(selectedItem.value.title)}&year=${selectedItem.value.year || ''}&imdb_id=${selectedItem.value.imdb_id || ''}`;
+              url = '/api/releases/movie?' + releaseQuery({ title: selectedItem.value.title, year: selectedItem.value.year, imdb_id: selectedItem.value.imdb_id });
             } else {
               const pack = tvScope.value === 'pack';
-              url = `/api/releases/tv?title=${encodeURIComponent(selectedItem.value.title)}&season=${selectedSeason.value}&episode=${pack ? '' : selectedEpisode.value}&pack=${pack}`;
+              url = '/api/releases/tv?' + releaseQuery({ title: selectedItem.value.title, season: selectedSeason.value, episode: pack ? null : selectedEpisode.value, pack: String(pack) });
             }
             const data = await apiFetch(url);
             releases.value = Array.isArray(data) ? data : [];
             markBackend(true);
           } catch (e) {
             showToast('Failed to fetch releases: ' + e.message, 'error');
-            markBackend(false);
+            if (isBackendFailure(e)) markBackend(false);
           } finally {
             loadingReleases.value = false;
           }
@@ -1639,7 +1757,7 @@
             markBackend(true);
           } catch (e) {
             loadError.value.series = 'Could not load monitored series: ' + e.message;
-            markBackend(false);
+            if (isBackendFailure(e)) markBackend(false);
           }
         }
 
@@ -1682,7 +1800,7 @@
             markBackend(true);
           } catch (e) {
             loadError.value.library = 'Could not scan the library: ' + e.message;
-            markBackend(false);
+            if (isBackendFailure(e)) markBackend(false);
           }
         }
 
@@ -1696,6 +1814,93 @@
           }
         }
 
+        // ------------------- Library management -------------------
+
+        function deleteLibraryItem(item, kind) {
+          const untrackNote = kind === 'tv' ? ' The show also stops being tracked, so no new episodes download.' : '';
+          requestConfirm({
+            title: 'Delete this title?',
+            message: `This erases "${item.title}" from your library and deletes its files and torrent.${untrackNote} This cannot be undone.`,
+            confirmLabel: 'Delete & erase files',
+            destructive: true,
+            onConfirm: async () => {
+              try {
+                await apiFetch('/api/library/delete', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ kind, name: item.name, confirm: true }),
+                });
+                showToast('Deleted ' + item.title, 'info');
+                await loadLibrary();
+                if (kind === 'tv') loadMonitoredSeries();
+              } catch (e) {
+                showToast('Could not delete ' + item.title + ': ' + e.message, 'error');
+              }
+            },
+          });
+        }
+
+        function stopSeeding(item, kind) {
+          requestConfirm({
+            title: 'Stop seeding?',
+            message: `"${item.title}" stops uploading to other peers. Its files stay in your library.`,
+            confirmLabel: 'Stop seeding',
+            destructive: false,
+            onConfirm: async () => {
+              try {
+                const res = await apiFetch('/api/library/remove-seed', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ kind, name: item.name }),
+                });
+                const removed = Boolean(res && res.removed);
+                showToast(removed ? 'Stopped seeding ' + item.title : item.title + ' was not seeding', removed ? 'success' : 'info');
+                await loadLibrary();
+              } catch (e) {
+                showToast('Could not stop seeding: ' + e.message, 'error');
+              }
+            },
+          });
+        }
+
+        async function trackShow(item) {
+          try {
+            await apiFetch('/api/library/track', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ kind: 'tv', name: item.name }),
+            });
+            showToast('Now tracking ' + item.title, 'success');
+            await loadLibrary();
+            loadMonitoredSeries();
+          } catch (e) {
+            showToast('Could not track ' + item.title + ': ' + e.message, 'error');
+          }
+        }
+
+        function untrackShow(item) {
+          requestConfirm({
+            title: 'Stop tracking?',
+            message: `Onyx will stop downloading new episodes of ${item.title}. Its files are not touched.`,
+            confirmLabel: 'Stop tracking',
+            destructive: true,
+            onConfirm: async () => {
+              try {
+                await apiFetch('/api/library/untrack', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ kind: 'tv', name: item.name }),
+                });
+                showToast('Stopped tracking ' + item.title, 'info');
+                await loadLibrary();
+                loadMonitoredSeries();
+              } catch (e) {
+                showToast('Could not stop tracking: ' + e.message, 'error');
+              }
+            },
+          });
+        }
+
         async function loadSettings() {
           try {
             const data = await apiFetch('/api/config');
@@ -1707,7 +1912,7 @@
             nextTick(() => { settingsSnapshot = settingsSignature(); settingsDirty.value = false; });
           } catch (e) {
             loadError.value.settings = 'Could not load settings: ' + e.message;
-            markBackend(false);
+            if (isBackendFailure(e)) markBackend(false);
           }
         }
 
@@ -1739,7 +1944,7 @@
             settingsDirty.value = false;
           } catch (e) {
             showToast('Could not save settings: ' + e.message, 'error');
-            markBackend(false);
+            if (isBackendFailure(e)) markBackend(false);
           } finally {
             savingSettings.value = false;
           }
@@ -1776,7 +1981,7 @@
             markBackend(true);
           } catch (e) {
             loadError.value.queue = 'Could not load the queue: ' + e.message;
-            markBackend(false);
+            if (isBackendFailure(e)) markBackend(false);
           }
         }
 
@@ -1801,11 +2006,28 @@
           if (settingsSnapshot && settingsSignature() !== settingsSnapshot) settingsDirty.value = true;
         }, { deep: true });
 
+        // Changing the media type or genre restarts the browse list from page one.
+        watch(searchType, () => {
+          syncSpotlight();
+          resetBrowse();
+        });
+        watch(genreFilter, () => resetBrowse());
+
+        watch(browseSentinel, (el) => {
+          if (browseObserver) browseObserver.disconnect();
+          if (!el || typeof IntersectionObserver === 'undefined') return;
+          browseObserver = new IntersectionObserver((entries) => {
+            if (entries.some((entry) => entry.isIntersecting)) loadMoreBrowse();
+          }, { rootMargin: '600px 0px' });
+          browseObserver.observe(el);
+        });
+
         onMounted(() => {
           initWebSocket();
           fetchQueue();
           loadMonitoredSeries();
           loadDiscover();
+          resetBrowse();
         });
 
         watch(() => Boolean(selectedItem.value) || confirmState.value.open, (open) => {
@@ -1814,7 +2036,8 @@
 
         return {
           activeTab, searchType, searchQuery, searching, searched, searchResults, searchError,
-          discover, loadingDiscover, discoverError, genreFilter, genreType, genreItems, loadingGenre,
+          discover, loadingDiscover, discoverError, genreFilter, genresForType,
+          browseItems, browseLoading, browseError, browseSentinel, browseKey, retryBrowse,
           modalType, detailInfo, similarTitles, loadingDetailInfo,
           detailOverview, detailRating, detailRuntime, detailGenres, detailStars, detailNetwork,
           modalLibraryStatus, modalInLibrary, spotlightTypeLabel,
@@ -1832,6 +2055,7 @@
           fetchReleases, downloadRelease, ingestMagnet, priorityUp, priorityDown,
           pauseTorrent, resumeTorrent, deleteTorrent, triggerManualImport, fetchQueue,
           monitorThisShow, loadMonitoredSeries, unmonitorSeries, loadLibrary, rescanLibrary,
+          deleteLibraryItem, stopSeeding, trackShow, untrackShow,
           loadSettings, saveSettings
         };
       }

@@ -1,10 +1,26 @@
 from __future__ import annotations
 
+import re
 import sqlite3
 import time
 from pathlib import Path
 
 from arr.core.models import DownloadState
+
+UNTRACKED_SCHEMA = """
+CREATE TABLE IF NOT EXISTS untracked_series (
+    title_key TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    tmdb_id INTEGER,
+    created_at REAL NOT NULL
+);
+"""
+
+
+def normalize_title(title: object) -> str:
+    """Comparable form of a title: lower case, punctuation and spacing collapsed."""
+    return re.sub(r"[^a-z0-9]+", " ", str(title or "").lower()).strip()
+
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS downloads (
@@ -97,6 +113,7 @@ class DB:
             for col, typ in (("year", "INTEGER"), ("imdb_id", "TEXT"), ("episode_title", "TEXT")):
                 if col not in cols:
                     self._conn.execute(f"ALTER TABLE downloads ADD COLUMN {col} {typ}")
+            self._conn.execute(UNTRACKED_SCHEMA)
             self._conn.commit()
         except sqlite3.OperationalError:
             pass
@@ -212,6 +229,13 @@ class DB:
         ).fetchall()
         return [dict(r) for r in rows]
 
+    def delete_episode(self, tmdb_id: int, season: int, episode: int) -> None:
+        self._conn.execute(
+            "DELETE FROM episodes WHERE tmdb_id=? AND season=? AND episode=?",
+            (tmdb_id, season, episode),
+        )
+        self._conn.commit()
+
     def episodes_for_download(self, infohash: str) -> list[dict]:
         rows = self._conn.execute(
             "SELECT * FROM episodes WHERE LOWER(infohash)=LOWER(?) ORDER BY season, episode",
@@ -240,6 +264,9 @@ class DB:
             "(tmdb_id, imdb_id, title, status, quality, created_at) VALUES (?,?,?,?,?,?)",
             (tmdb_id, imdb_id, title, status, quality, time.time()),
         )
+        self._conn.execute(
+            "DELETE FROM untracked_series WHERE title_key=?", (normalize_title(title),)
+        )
         self._conn.commit()
         row = self._conn.execute(
             "SELECT id FROM monitored_series WHERE tmdb_id=?", (tmdb_id,)
@@ -253,6 +280,28 @@ class DB:
     def remove_monitored(self, series_id: int) -> None:
         self._conn.execute("DELETE FROM monitored_series WHERE id=?", (series_id,))
         self._conn.commit()
+
+    def untrack_series(self, series_id: int) -> bool:
+        """Stop tracking a show and remember that choice, so a disk scan won't re-track it."""
+        row = self._conn.execute(
+            "SELECT * FROM monitored_series WHERE id=?", (series_id,)
+        ).fetchone()
+        if row is None:
+            return False
+        self._conn.execute(
+            "INSERT OR REPLACE INTO untracked_series (title_key, title, tmdb_id, created_at) "
+            "VALUES (?,?,?,?)",
+            (normalize_title(row["title"]), row["title"], row["tmdb_id"], time.time()),
+        )
+        self._conn.execute("DELETE FROM monitored_series WHERE id=?", (series_id,))
+        self._conn.commit()
+        return True
+
+    def is_untracked(self, title: str) -> bool:
+        row = self._conn.execute(
+            "SELECT 1 FROM untracked_series WHERE title_key=?", (normalize_title(title),)
+        ).fetchone()
+        return row is not None
 
     def set_last_checked(self, series_id: int, ts: float) -> None:
         self._conn.execute(

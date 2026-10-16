@@ -40,6 +40,18 @@ def test_index_page(client: TestClient) -> None:
     assert "Onyx — Media Discovery & Downloader" in resp.text
 
 
+MOJIBAKE_MARKERS = ("Â", "â€", "â†", "âœ", "âˆ", "Ã")
+
+
+def test_index_page_has_no_mojibake(client: TestClient) -> None:
+    """UTF-8 symbols must never be decoded twice (Â·, â†“, âœ“, âˆž shipped before)."""
+    body = client.get("/").text
+    for marker in MOJIBAKE_MARKERS:
+        assert marker not in body, f"mojibake sequence {marker!r} found in index.html"
+    for glyph in ("·", "↓", "↑", "✓ Monitoring", "∞"):
+        assert glyph in body
+
+
 def test_api_search_movies(client: TestClient) -> None:
     mock_results = [{"id": "tt123", "title": "Inception", "year": 2010}]
     with patch("arr.metadata.imdb.ImdbClient.search_movies", return_value=mock_results):
@@ -108,6 +120,33 @@ def test_api_releases_tv(client: TestClient) -> None:
         assert len(data) == 1
         assert data[0]["infohash"] == "hash456"
         assert data[0]["score"] == 820
+
+
+def test_api_releases_tv_pack_accepts_blank_episode(client: TestClient) -> None:
+    """A season-pack search sends `episode=` blank; that must not be a 422."""
+    with patch(
+        "arr.web.routes.search.search_candidates",
+        new_callable=AsyncMock,
+        return_value=([], [], None),
+    ) as mock_search:
+        resp = client.get("/api/releases/tv?title=Show&season=2&episode=&pack=true")
+    assert resp.status_code == 200
+    assert resp.json() == []
+    assert mock_search.await_args.kwargs.get("episode") is None
+    assert mock_search.await_args.kwargs.get("season") == 2
+
+
+def test_api_releases_movie_accepts_blank_year_and_imdb(client: TestClient) -> None:
+    """Movies without a year send `year=` blank; that must not be a 422 either."""
+    with patch(
+        "arr.web.routes.search.search_candidates",
+        new_callable=AsyncMock,
+        return_value=([], [], None),
+    ) as mock_search:
+        resp = client.get("/api/releases/movie?title=Green%20Book&year=&imdb_id=")
+    assert resp.status_code == 200
+    assert mock_search.await_args.kwargs.get("year") is None
+    assert mock_search.await_args.kwargs.get("imdb_id") is None
 
 
 def test_queue_delete_removes_torrent_files_and_record(

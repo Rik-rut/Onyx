@@ -10,7 +10,7 @@ from pathlib import Path
 from arr.config.settings import Config
 from arr.core.models import Episode, MediaType, QualityProfile, Query, Release, Series
 from arr.core.parsing import Scored, explain, rank
-from arr.db import DB
+from arr.db import DB, normalize_title
 from arr.importer.layout import (
     MEDIA_EXTS,
     delete_path,
@@ -1687,7 +1687,7 @@ _DISK_HASH_PREFIX = "disk-"
 
 
 def _normalize_title(title: object) -> str:
-    return re.sub(r"[^a-z0-9]+", " ", str(title or "").lower()).strip()
+    return normalize_title(title)
 
 
 def _disk_infohash(path: Path) -> str:
@@ -1936,6 +1936,9 @@ def _sync_disk_shows(cfg: Config, db: DB) -> tuple[int, int, int]:
             continue
         shows += 1
         row = _find_monitored(db, title)
+        if row is None and db.is_untracked(title):
+            # The user stopped tracking this show; don't undo that on every scan.
+            continue
         if row is None:
             try:
                 client = TvmazeClient(cfg)
