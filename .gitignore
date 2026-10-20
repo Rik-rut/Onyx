@@ -17,6 +17,7 @@ logs/*.log
 downloads/
 agent/
 screenshots/
+openspec/
 
 # Environment variables
 .env
