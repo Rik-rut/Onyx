@@ -8,7 +8,7 @@ services:
     container_name: arr
     restart: unless-stopped
     ports:
-      - "${WEB_PORT:-8080}:8080"
+      - "${WEB_PORT:-3698}:3698"
       - "${TRANSMISSION_PORT:-9091}:9091"
       - "51413:51413"
       - "51413:51413/udp"
@@ -42,7 +42,7 @@ services:
           description:
             en_us: Destination directory for downloaded TV Shows
       ports:
-        - container: 8080
+        - container: 3698
           description:
             en_us: Onyx Web Dashboard port
         - container: 9091
@@ -58,4 +58,4 @@ services:
       description:
         en_us: Onyx autonomously discovers, downloads, and organises movies and TV shows with zero API keys.
       index: /
-      port_map: "8080"
+      port_map: "3698"

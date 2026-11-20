@@ -63,7 +63,7 @@ def interactive_cmd(ctx: typer.Context) -> None:
 def web_cmd(
     ctx: typer.Context,
     host: str = typer.Option("0.0.0.0", "--host", help="Host interface to bind on"),
-    port: int = typer.Option(8080, "--port", help="Port to listen on"),
+    port: int = typer.Option(3698, "--port", help="Port to listen on"),
     open_browser: bool = typer.Option(
         True, "--open-browser/--no-open-browser", help="Open browser on start"
     ),

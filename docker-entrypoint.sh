@@ -41,5 +41,5 @@ transmission-daemon \
 sleep 1
 
 # Launch ARR Web Dashboard
-echo "[ARR] Launching ARR Web Dashboard on 0.0.0.0:8080..."
-exec uv run arr web --host 0.0.0.0 --port 8080 --config /config/config.toml
+echo "[ARR] Launching ARR Web Dashboard on 0.0.0.0:3698..."
+exec uv run arr web --host 0.0.0.0 --port 3698 --config /config/config.toml

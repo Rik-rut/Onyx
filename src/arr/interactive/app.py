@@ -144,7 +144,7 @@ def run_interactive(cfg: Config, c: Console | None = None) -> int:
                     from arr.web.app import create_app
 
                     host = "127.0.0.1"
-                    port_val = 8080
+                    port_val = 3698
                     web_url = f"http://{host}:{port_val}"
                     target.print(
                         f"\n[bold green]Starting Web Dashboard at {web_url}...[/bold green]"

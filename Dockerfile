@@ -29,6 +29,6 @@ RUN chmod +x /app/docker-entrypoint.sh
 # Create mount points
 RUN mkdir -p /config /downloads/movies /downloads/tv-shows
 
-EXPOSE 8080 9091 51413 51413/udp
+EXPOSE 3698 9091 51413 51413/udp
 
 ENTRYPOINT ["/app/docker-entrypoint.sh"]

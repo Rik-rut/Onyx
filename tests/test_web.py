@@ -366,7 +366,7 @@ def test_docker_and_compose_spec_validity() -> None:
     assert "/downloads/movies" in compose_content
     assert "/downloads/tv-shows" in compose_content
     assert "/config" in compose_content
-    assert "8080" in compose_content
+    assert "3698" in compose_content
 
 
 def test_favicon(client: TestClient) -> None:
