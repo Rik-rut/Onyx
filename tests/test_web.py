@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -34,10 +35,15 @@ def _no_real_daemon():
 
 
 def test_index_page(client: TestClient) -> None:
+    """R5.x: GET / must serve the compiled SPA entry, never the Vue monolith."""
     resp = client.get("/")
     assert resp.status_code == 200
-    assert "ONYX" in resp.text
-    assert "Onyx — Media Discovery & Downloader" in resp.text
+    assert "<!doctype html>" in resp.text
+    assert "Onyx — Media Discovery" in resp.text
+    assert "/assets/" in resp.text
+    for cdn in ("cdn.tailwindcss.com", "unpkg.com", "jsdelivr"):
+        assert cdn not in resp.text
+    assert 'src="http' not in resp.text and 'href="http' not in resp.text
 
 
 MOJIBAKE_MARKERS = ("Â", "â€", "â†", "âœ", "âˆ", "Ã")
@@ -47,9 +53,27 @@ def test_index_page_has_no_mojibake(client: TestClient) -> None:
     """UTF-8 symbols must never be decoded twice (Â·, â†“, âœ“, âˆž shipped before)."""
     body = client.get("/").text
     for marker in MOJIBAKE_MARKERS:
-        assert marker not in body, f"mojibake sequence {marker!r} found in index.html"
-    for glyph in ("·", "↓", "↑", "✓ Monitoring", "∞"):
-        assert glyph in body
+        assert marker not in body, f"mojibake sequence {marker!r} found in served HTML"
+    assert "charset=" in body and "utf-8" in body.lower()
+    assert "Onyx — Media Discovery" in body
+
+
+def test_spa_fallback_serves_entry_on_nested_routes(client: TestClient) -> None:
+    """Direct visits and reloads of client routes resolve to the SPA document."""
+    entry = client.get("/").text
+    for path in ("/queue", "/settings", "/movie/tt1375666", "/tv/42", "/library", "/search"):
+        resp = client.get(path)
+        assert resp.status_code == 200
+        assert resp.text == entry
+
+
+def test_unknown_api_and_ws_paths_stay_json_404(client: TestClient) -> None:
+    """The SPA catch-all must not swallow missing API/WebSocket endpoints."""
+    for path in ("/api/nonexistent", "/api/queue/nope/nope", "/ws/queue"):
+        resp = client.get(path)
+        assert resp.status_code == 404
+        assert "json" in resp.headers["content-type"]
+        assert "doctype" not in resp.text.lower()
 
 
 def test_api_search_movies(client: TestClient) -> None:
@@ -769,15 +793,19 @@ def test_update_config_subtitle_fields(client: TestClient) -> None:
         assert cfg["subtitle_languages"] == ["es", "fr"]
 
 
-def test_index_page_phase6_elements(client: TestClient) -> None:
-    resp = client.get("/")
-    assert resp.status_code == 200
-    assert "Rescan Library" in resp.text
-    assert "tvDetails" in resp.text
-    assert "priorityUp" in resp.text
-    assert "priorityDown" in resp.text
-    assert "filteredReleases" in resp.text
-    assert "subtitleLanguagesInput" in resp.text
+def test_spa_fallback_missing_build_diagnostic(test_cfg: Config, tmp_path: Path) -> None:
+    """An unbuilt frontend bundle must yield a build hint, not a crash."""
+    unbuilt = tmp_path / "unbuilt-dist"
+    with patch("arr.web.app.DIST_DIR", unbuilt):
+        client = TestClient(create_app(test_cfg))
+        resp = client.get("/queue")
+        assert resp.status_code == 200
+        assert "Onyx frontend bundle is missing" in resp.text
+        assert "npm run build" in resp.text
+        assert "doctype" in resp.text.lower()
+        api = client.get("/api/config")
+        assert api.status_code == 200
+        assert api.json()["library_root"] == str(test_cfg.get("library_root"))
 
 
 def test_web_startup_runs_library_maintenance(test_cfg: Config) -> None:
@@ -805,42 +833,15 @@ def test_web_startup_runs_library_maintenance(test_cfg: Config) -> None:
     assert pipeline is not None
 
 
-def test_index_page_discover_homepage(client: TestClient) -> None:
-    """R4.3: the homepage is a Seerr-style Discover view, not a blank search box."""
-    resp = client.get("/")
-    assert resp.status_code == 200
-    body = resp.text
-    assert 'data-testid="discover-view"' in body
-    assert "Hero Spotlight" in body or "spotlight" in body
-    assert "Browse by Genre" in body
-    for rail in ("Trending Movies", "Trending TV Shows", "Top Rated Movies"):
-        assert rail in body
-    assert "showDiscover" not in body  # no dead references to removed code
-    assert "loadDiscover" in body
-    assert "loadGenre" in body
-
-
-def test_index_page_availability_badges_and_warning(client: TestClient) -> None:
-    """R3.2/R4.3: badges, the duplicate warning and More Like This are wired in."""
-    resp = client.get("/")
-    body = resp.text
-    assert "libraryBadgeLabel" in body
-    assert "Partially Available" in body
-    assert "In Queue" in body
-    assert "Already in Library" in body
-    assert "Download again" in body
-    assert "/api/movie/" in body
-    assert "loadMovieDetails" in body
-    assert "More Like This" in body
-
-
-def test_index_page_onyx_theme(client: TestClient) -> None:
-    """R5.1: obsidian background and indigo accents."""
-    body = client.get("/").text
-    assert "#090d16" in body
-    assert "#111827" in body
-    assert "#6366f1" in body
-    assert "bg-gradient-to-r from-white via-slate-300 to-indigo-400" in body
+def test_index_page_spa_theme_tokens(client: TestClient) -> None:
+    """R5.1: the served stylesheet carries the obsidian/indigo palette."""
+    html = client.get("/").text
+    stylesheets = re.findall(r'href="(/assets/[^"]+\.css)"', html)
+    if not stylesheets:
+        pytest.skip("frontend bundle not built: cd frontend && npm run build")
+    css = client.get(stylesheets[0]).text
+    for token in ("#090d16", "#111827", "#6366f1"):
+        assert token in css
 
 
 def test_download_release_propagates_enqueue_failure(client: TestClient) -> None:

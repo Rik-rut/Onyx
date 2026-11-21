@@ -38,6 +38,34 @@ if not defined UV (
     exit /b 1
 )
 
+REM Auto-build the compiled SPA when it is missing (fresh clone / cleaned tree).
+if exist "src\arr\web\static\dist\index.html" goto :spa_ready
+echo [arr] Compiled SPA missing; building frontend...
+where npm >nul 2>nul
+if errorlevel 1 goto :spa_no_node
+cd frontend
+if not exist node_modules call npm install
+if errorlevel 1 goto :spa_failed
+call npm run build
+if errorlevel 1 goto :spa_failed
+cd ..
+if not exist "src\arr\web\static\dist\index.html" goto :spa_failed
+goto :spa_ready
+:spa_no_node
+echo.
+echo [arr] Node/npm not found. Install Node 22+, then build the UI manually:
+echo   cd frontend ^&^& npm install ^&^& npm run build
+echo Continuing without compiled assets; the web UI will show a diagnostic.
+goto :spa_ready
+:spa_failed
+echo.
+echo [arr] Frontend build failed. Install Node 22+ and run:
+echo   cd frontend ^&^& npm install ^&^& npm run build
+pause
+popd
+exit /b 1
+:spa_ready
+
 "%UV%" python find 3.11 >nul 2>nul
 if errorlevel 1 (
     echo [arr] No Python 3.11 found; uv will fetch one automatically on first sync.

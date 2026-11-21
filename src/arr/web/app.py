@@ -3,8 +3,8 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, Response
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from arr.config.settings import Config
@@ -17,6 +17,40 @@ from arr.web.routes.search import router as search_router
 from arr.web.routes.ws import router as ws_router
 
 logger = get_logger("web")
+
+STATIC_DIR = Path(__file__).parent / "static"
+DIST_DIR = STATIC_DIR / "dist"
+
+
+BUILD_HINT_HTML = (
+    '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+    "<title>Onyx frontend not built</title></head><body>"
+    "<h1>Onyx frontend bundle is missing</h1>"
+    "<p>No compiled SPA found at <code>src/arr/web/static/dist/index.html</code>. "
+    "Build it from the repo root:</p>"
+    "<pre>cd frontend &amp;&amp; npm install &amp;&amp; npm run build</pre>"
+    "<p>The REST API (<code>/api/*</code>) and the queue WebSocket "
+    "(<code>/ws/queue</code>) work without the frontend bundle.</p>"
+    "</body></html>"
+)
+
+
+def _spa_document() -> Response:
+    """The compiled SPA entry HTML, or a build instruction when it is absent."""
+    index_file = DIST_DIR / "index.html"
+    if index_file.is_file():
+        return HTMLResponse(content=index_file.read_text(encoding="utf-8"))
+    return HTMLResponse(content=BUILD_HINT_HTML)
+
+
+def _dist_file(name: str) -> Path | None:
+    """A static file inside dist/, refusing anything outside it."""
+    candidate = (DIST_DIR / name).resolve()
+    root = DIST_DIR.resolve()
+    if candidate.is_file() and candidate.is_relative_to(root):
+        return candidate
+    return None
+
 
 FAVICON_SVG = (
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
@@ -111,7 +145,7 @@ def create_app(cfg: Config) -> FastAPI:
         if request.url.query:
             path += f"?{request.url.query}"
         # Skip noisy static assets from cluttering the log
-        if not path.startswith("/static"):
+        if not path.startswith(("/static", "/assets")):
             logger.info(f"{request.method} {path} -> {response.status_code} ({duration_ms:.1f}ms)")
         return response
 
@@ -122,19 +156,27 @@ def create_app(cfg: Config) -> FastAPI:
     app.include_router(config_router)
     app.include_router(ws_router)
 
-    static_dir = Path(__file__).parent / "static"
-    index_file = static_dir / "index.html"
+    assets_dir = DIST_DIR / "assets"
+    if assets_dir.is_dir():
+        app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
 
     @app.get("/favicon.ico")
     async def get_favicon() -> Response:
         return Response(content=FAVICON_SVG, media_type="image/svg+xml")
 
     @app.get("/", response_class=HTMLResponse)
-    async def get_index() -> HTMLResponse:
-        content = index_file.read_text(encoding="utf-8")
-        return HTMLResponse(content=content)
+    async def get_index() -> Response:
+        return _spa_document()
 
-    if static_dir.exists():
-        app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+    @app.get("/{full_path:path}")
+    async def spa_fallback(full_path: str) -> Response:
+        """Client-side routes reload to the SPA entry document; unknown /api
+        and /ws paths stay 404 JSON so they never masquerade as HTML."""
+        if full_path.startswith(("api/", "ws/")):
+            raise HTTPException(status_code=404)
+        static_file = _dist_file(full_path)
+        if static_file is not None:
+            return FileResponse(static_file)
+        return _spa_document()
 
     return app

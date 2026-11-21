@@ -33,4 +33,9 @@ openspec/
 # Portable binaries
 bin/
 
+# Frontend workspace (compiled SPA lives in src/arr/web/static/dist)
+frontend/node_modules/
+frontend/dist/
+src/arr/web/static/dist/
+
 

@@ -1,6 +1,14 @@
+# Stage 1: Compile the Svelte 5 + Vite + Tailwind CSS SPA into static assets.
+FROM node:22-slim AS spa
+WORKDIR /workspace/frontend
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend/ ./
+RUN npm run build
+
+# Stage 2: Pure Python + Transmission + FFmpeg runtime serving compiled static assets.
 FROM python:3.11-slim
 
-# Install system dependencies including transmission-daemon and ffmpeg
 RUN apt-get update && apt-get install -y --no-install-recommends \
     transmission-daemon \
     transmission-cli \
@@ -14,19 +22,15 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 WORKDIR /app
 
-# Copy dependency definition
 COPY pyproject.toml uv.lock* ./
-
-# Copy full application source code
 COPY . /app
 
-# Install application and all dependencies with uv
+# Copy only the freshly compiled SPA static bundle from the Node build stage
+COPY --from=spa /workspace/src/arr/web/static/dist /app/src/arr/web/static/dist
+
 RUN uv sync --frozen --no-dev || uv sync --no-dev
 
-# Ensure entrypoint script is executable
 RUN chmod +x /app/docker-entrypoint.sh
-
-# Create mount points
 RUN mkdir -p /config /downloads/movies /downloads/tv-shows
 
 EXPOSE 3698 9091 51413 51413/udp
