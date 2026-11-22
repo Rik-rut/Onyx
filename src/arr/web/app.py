@@ -129,6 +129,11 @@ async def lifespan(app: FastAPI):
             await poller_task
         except (asyncio.CancelledError, Exception):
             pass
+        # Release the shared TPB browser (design D1: one browser per
+        # process, closed on shutdown).
+        from arr.indexers.browser import close_browser_session
+
+        await close_browser_session()
 
 
 def create_app(cfg: Config) -> FastAPI:

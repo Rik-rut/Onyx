@@ -142,3 +142,76 @@ def test_title_gate_only_applies_to_configured_indexers():
     )
     s = rank([r], q, QualityProfile(), cfg)[0]
     assert s.rejected is None
+
+
+def test_primary_indexer_beats_fallback_with_more_seeders():
+    """2.1: primary-indexer release beats fallback release with more seeders."""
+    q = Query(media_type=MediaType.TV, text="Breaking Bad")
+    cfg = {
+        "min_seeders": 1,
+        "indexer_priority": ["eztv", "tpb"],
+    }
+    eztv_release = mk("Breaking.Bad.S01E01.1080p.WEB-DL", seeds=5, indexer="eztv")
+    tpb_release = mk("Breaking.Bad.S01E01.1080p.WEB-DL", seeds=50, indexer="tpb")
+    scored = rank([tpb_release, eztv_release], q, QualityProfile(), cfg)
+    assert scored[0].release.indexer == "eztv"
+    assert scored[1].release.indexer == "tpb"
+
+
+def test_fallback_wins_when_primary_empty():
+    """2.1: fallback wins when primary set is empty."""
+    q = Query(media_type=MediaType.TV, text="Breaking Bad")
+    cfg = {
+        "min_seeders": 1,
+        "indexer_priority": ["eztv", "tpb"],
+    }
+    tpb_release = mk("Breaking.Bad.S01E01.1080p.WEB-DL", seeds=50, indexer="tpb")
+    scored = rank([tpb_release], q, QualityProfile(), cfg)
+    assert scored[0].release.indexer == "tpb"
+
+
+def test_unknown_indexer_sorts_last():
+    """2.1: unknown indexer sorts last regardless of seeders."""
+    q = Query(media_type=MediaType.MOVIE, text="Inception")
+    cfg = {
+        "min_seeders": 1,
+        "indexer_priority": ["yts", "unknown-ish"],
+    }
+    yts_release = mk("Inception 2010 1080p", seeds=5, indexer="yts")
+    unknown_release = mk("Inception 2010 1080p", seeds=100, indexer="unknown-ish")
+    scored = rank([unknown_release, yts_release], q, QualityProfile(), cfg)
+    assert scored[0].release.indexer == "yts"
+    assert scored[1].release.indexer == "unknown-ish"
+
+
+def test_custom_priority_order_respected():
+    """2.1: custom priority order is respected."""
+    q = Query(media_type=MediaType.TV, text="Show")
+    cfg = {
+        "min_seeders": 1,
+        "indexer_priority": ["tpb", "nyaa", "eztv", "yts"],
+    }
+    releases = [
+        mk("Show S01E01", seeds=10, indexer="yts"),
+        mk("Show S01E01", seeds=20, indexer="eztv"),
+        mk("Show S01E01", seeds=30, indexer="nyaa"),
+        mk("Show S01E01", seeds=40, indexer="tpb"),
+    ]
+    scored = rank(releases, q, QualityProfile(), cfg)
+    assert [s.release.indexer for s in scored] == ["tpb", "nyaa", "eztv", "yts"]
+
+
+def test_rank_stable_with_indexer_priority():
+    """2.1: rank remains stable and deterministic with indexer priority."""
+    q = Query(media_type=MediaType.MOVIE, text="Movie")
+    cfg = {
+        "min_seeders": 1,
+        "indexer_priority": ["yts", "eztv"],
+    }
+    releases = [
+        mk("Movie 2020 720p", seeds=10, indexer="yts"),
+        mk("Movie 2020 720p", seeds=10, indexer="eztv"),
+    ]
+    scored = rank(releases, q, QualityProfile(), cfg)
+    assert scored[0].release.indexer == "yts"
+    assert scored[1].release.indexer == "eztv"

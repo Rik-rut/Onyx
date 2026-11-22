@@ -28,7 +28,10 @@ COPY . /app
 # Copy only the freshly compiled SPA static bundle from the Node build stage
 COPY --from=spa /workspace/src/arr/web/static/dist /app/src/arr/web/static/dist
 
+# Sync the runtime venv, then install the bundled Chromium for the TPB
+# browser indexer (must run through uv so the venv contains playwright).
 RUN uv sync --frozen --no-dev || uv sync --no-dev
+RUN uv run playwright install --with-deps chromium
 
 RUN chmod +x /app/docker-entrypoint.sh
 RUN mkdir -p /config /downloads/movies /downloads/tv-shows

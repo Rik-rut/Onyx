@@ -1,8 +1,8 @@
 # arr
 
-CLI client that searches public torrent indexers (YTS for movies, EZTV for TV, Nyaa for anime),
-ranks releases by seeders/quality, hands the chosen magnet to a locally managed
-`transmission-daemon`, and imports completed downloads into a Sonarr/Radarr-compatible library.
+CLI client that searches public torrent indexers (YTS for movies, EZTV for TV, Nyaa for anime,
+The Pirate Bay (TPB) for TV/movies via headless browser scraping, and Torrentio as a self-hosted
+sidecar for reliable aggregated results), ranks releases by seeders/quality, hands the chosen
 No GUI/TUI. See `LEGAL.md` for the legal posture and `GOTCHAS.md` for known failure modes.
 
 ## Requirements
@@ -51,10 +51,10 @@ uv run mypy arr
 `--transmission-remote <path>` (global option) overrides the `transmission-remote` binary path.
 
 Key settings: `download_root`, `library_root`,
-`transmission_rpc_*`, `yts_base_url`/`eztv_base_url`/`nyaa_base_url`,
-`tvmaze_base_url`/`imdb_base_url`/`subscene_base_url`/`yify_subtitles_base_url`, `seeding_policy`
-(`ratio`/`time`/`manual`/`remove_on_import`), `import_mode` (`hardlink`/`copy`/`move`),
-`max_concurrent_downloads` (default 3), `prefer_season_packs`, `subtitle_languages` (default `["en"]`),
+`transmission_rpc_*`, `yts_base_url`/`eztv_base_url`/`nyaa_base_url`/`tpb_base_url`/`torrentio_base_url`,
+`tvmaze_base_url`/`imdb_base_url`/`subscene_base_url`/`yify_subtitles_base_url`,
+`enabled_indexers` (default `["yts","eztv","nyaa","tpb","torrentio"]`),
+`indexer_priority` (default `["yts","eztv","nyaa","tpb","torrentio"]`),
 `subtitles_enabled`, `subtitles_forced_only`, `monitor_poll_interval_minutes`,
 `monitor_lookahead_days`, `unmonitor_ended_series`.
 
@@ -98,6 +98,23 @@ already imported/downloading, searches → ranks → enqueues (respecting `max_c
 imports completed downloads, applies the seeding policy, then sleeps. Ended/canceled shows keep
 showing in `series list`; `unmonitor_ended_series = true` auto-removes them. Indexer failures during a
 tick mark affected episodes `retry_pending` and never halt the loop. Ticks are idempotent.
+### New Indexers
+
+- **The Pirate Bay (TPB)** — Headless browser scraping via Playwright. Uses a persistent Chromium
+  profile under the cache directory to mitigate Cloudflare challenges. TV results are constrained
+  to TPB's TV categories so movie rows never leak into TV searches. Malformed rows are skipped
+  gracefully.
+- **Torrentio** — Self-hosted sidecar scraper (default `http://localhost:8085`). Aggregates results
+  from multiple upstream providers (YTS, EZTV, Nyaa, 1337x, ThePirateBay). A connection failure
+  marks the sidecar as down for 60 seconds, during which searches return empty results without
+  network calls.
+
+### Sidecar Service
+
+When running via `docker-compose`, the `torrentio-scraper` service is included as an optional
+sidecar, exposed on host port `8085`. Inside the compose network the `arr` service reaches it at
+`http://torrentio-scraper:8080`; the auto-generated Docker config already points
+`torrentio_base_url` there, while the non-Docker default stays `http://localhost:8085`.
 
 ## Library layout
 

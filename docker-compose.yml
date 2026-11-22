@@ -59,3 +59,18 @@ services:
         en_us: Onyx autonomously discovers, downloads, and organises movies and TV shows with zero API keys.
       index: /
       port_map: "3698"
+  torrentio-scraper:
+    image: ghcr.io/th3r0b/torrentio-scraper:latest
+    container_name: torrentio-scraper
+    restart: unless-stopped
+    ports:
+      - "8085:8080"
+    environment:
+      - PROVIDERS=YTS,EZTV,Nyaa,1337x,ThePirateBay
+    x-casaos:
+      author: Onyx Team
+      category: Media
+      title:
+        en_us: Torrentio Scraper Sidecar
+      description:
+        en_us: Self-hosted torrent scraper for reliable search results

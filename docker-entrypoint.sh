@@ -23,6 +23,7 @@ seeding_policy = "ratio"
 subtitles_enabled = true
 subtitle_languages = ["en"]
 max_concurrent_downloads = 3
+torrentio_base_url = "http://torrentio-scraper:8080"
 EOF
 fi
 

@@ -236,9 +236,13 @@ def rank(
         out.append(Scored(release=r, score=score_release(r, q, profile)))
     accepted = [s for s in out if s.rejected is None]
     rejected = [s for s in out if s.rejected is not None]
+    priority_order = cfg.get("indexer_priority", []) or []
     accepted.sort(
         key=lambda s: (
-            -s.score["seeders"],
+            priority_order.index(s.release.indexer)
+            if s.release.indexer in priority_order
+            else len(priority_order),
+            +s.score["seeders"] * -1,
             s.score["resolution_rank"],
             s.score["source_rank"],
             s.score["codec_rank"],
