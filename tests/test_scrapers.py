@@ -2,6 +2,9 @@
 
 import json
 
+import httpx
+import respx
+
 from arr.config.settings import DEFAULTS, Config
 from arr.metadata.imdb import ImdbClient, ImdbError
 from arr.subtitles.base import SubtitleError
@@ -219,6 +222,48 @@ def test_imdb_movies_by_genre(tmp_path):
     assert "genres=action" in "".join(session.calls)
 
 
+SIMILAR_ITEMS = [
+    {
+        "id": "tt0111161",
+        "titleText": {"text": "The Shawshank Redemption"},
+        "releaseYear": {"year": 1994},
+        "primaryImage": {"url": "https://img.example/shawshank.jpg"},
+        "ratingsSummary": {"aggregateRating": 9.3},
+    },
+    {
+        "id": "tt0468569",
+        "titleText": {"text": "The Dark Knight"},
+        "releaseYear": {"year": 2008},
+        "primaryImage": {"url": "https://img.example/knight.jpg"},
+        "ratingsSummary": {"aggregateRating": 9.0},
+    },
+    {
+        "id": "tt1375666",
+        "titleText": {"text": "Inception"},
+        "releaseYear": {"year": 2010},
+        "primaryImage": {"url": "https://img.example/inception.jpg"},
+        "ratingsSummary": {"aggregateRating": 8.8},
+    },
+]
+
+
+def test_imdb_similar_by_genre_rating_order_excludes_seed(tmp_path):
+    """4.2: the no-MLT fallback asks IMDb for the seed's genres (any match)
+    sorted by user rating, and drops the seed itself."""
+    session = FakeSession(
+        {"/search/title/": FakeResponse(200, _chart_html(SIMILAR_ITEMS, key="titleResults"))}
+    )
+    c = ImdbClient(cfg(), cache_dir=tmp_path, session=session)
+
+    items = c._similar_by_genre(["Drama", "Crime"], exclude="tt0468569", limit=6)
+
+    ids = [i["imdb_id"] for i in items]
+    assert ids == ["tt0111161", "tt1375666"]  # seed dropped, IMDb order kept
+    url = "".join(session.calls)
+    assert "genres=drama%2Ccrime" in url
+    assert "sort=user_rating,desc" in url
+
+
 MOVIE_DETAILS_PAYLOAD = {
     "props": {
         "pageProps": {
@@ -348,6 +393,166 @@ def test_imdb_movie_details_degrades_to_suggestion_when_blocked(tmp_path):
     assert d["degraded"] is True
     # genre-based recommendations keep the "More Like This" rail populated
     assert all(s["imdb_id"] != "tt1375666" for s in d["similar"])
+
+
+WIKI_INTRO = (
+    "Inception is a 2010 science fiction action adventure heist film produced "
+    "by Syncopy Inc., directed by Christopher Nolan."
+)
+WIKI_WIKITEXT = (
+    "{{Infobox Film\n"
+    "| director = Christopher Nolan\n"
+    "| runtime = 148 minutes<ref/>\n"
+    "}}"
+)
+
+
+def _stub_wiki(mock, monkeypatch, tmp_path, working: bool = True) -> None:
+    """Route the enrichment module's endpoints through respx.
+
+    Call with the active ``respx.mock`` router: module-level ``respx.get``
+    binds to respx's global mock instead, so its routes would never match.
+    The enrichment cache is pointed at ``tmp_path`` so tests never read or
+    write the repo's ``.cache``.
+    """
+    from arr.metadata import wikipedia
+
+    monkeypatch.setattr(wikipedia, "_CACHE_DIR", tmp_path / "wiki")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if not working:
+            return httpx.Response(500, json={})
+        if request.url.host == "www.wikidata.org":
+            if request.url.path.startswith("/wiki/Special:EntityData"):
+                return httpx.Response(
+                    200,
+                    json={
+                        "entities": {
+                            "Q25188": {
+                                "claims": {
+                                    "P136": [
+                                        {
+                                            "mainsnak": {
+                                                "datavalue": {"value": {"id": "Q496523"}}
+                                            }
+                                        },
+                                        {
+                                            "mainsnak": {
+                                                "datavalue": {"value": {"id": "Q10574855"}}
+                                            }
+                                        },
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                )
+            return httpx.Response(
+                200,
+                json={
+                    "entities": {
+                        "Q496523": {"labels": {"en": {"value": "Science fiction film"}}},
+                        "Q10574855": {"labels": {"en": {"value": "Heist film"}}},
+                    }
+                },
+            )
+        if request.url.params.get("action") == "parse":
+            return httpx.Response(200, json={"parse": {"wikitext": WIKI_WIKITEXT}})
+        return httpx.Response(
+            200,
+            json={
+                "query": {
+                    "pages": [
+                        {
+                            "pageid": 1,
+                            "title": "Inception",
+                            "extract": WIKI_INTRO,
+                            "pageprops": {"wikibase_item": "Q25188"},
+                        }
+                    ]
+                }
+            },
+        )
+
+    for pattern in (
+        r"https://en\.wikipedia\.org/w/api\.php",
+        r"https://www\.wikidata\.org/w/api\.php",
+        r"https://www\.wikidata\.org/wiki/Special:EntityData/.*",
+    ):
+        mock.get(url__regex=pattern).mock(side_effect=handler)
+
+
+def test_imdb_degraded_details_enriched_from_wikipedia(tmp_path, monkeypatch):
+    """Defect A: IMDb title pages are WAF-challenge-blocked here, so the degraded
+    payload must still carry a synopsis, genres and a runtime — and must not
+    invent a rating from a source that has none."""
+    suggestion = json.dumps(
+        {
+            "d": [
+                {
+                    "id": "tt9912345",
+                    "l": "Inception",
+                    "y": 2010,
+                    "s": "Leonardo DiCaprio, Joseph Gordon-Levitt",
+                    "i": {"imageUrl": "https://img.example/inception.jpg"},
+                }
+            ]
+        }
+    )
+    session = FakeSession(
+        {
+            "/title/tt9912345/": FakeResponse(
+                202, "<html><body>AwsWafIntegration challenge</body></html>"
+            ),
+            "/suggestion/": FakeResponse(200, suggestion),
+            "/search/title/": FakeResponse(
+                200, _chart_html(SIMILAR_ITEMS, key="titleResults")
+            ),
+        }
+    )
+    c = ImdbClient(cfg(), cache_dir=tmp_path, session=session)
+
+    with respx.mock(assert_all_called=False) as mock:
+        _stub_wiki(mock, monkeypatch, tmp_path)
+        d = c.movie_details("tt9912345")
+
+    assert d["overview"].startswith("Inception is a 2010")
+    assert d["runtime"] == 148
+    # Trailing " film" is stripped from the Wikidata labels.
+    assert d["genres"] == ["Science fiction", "Heist"]
+    assert d["degraded"] is True
+    assert d["rating"] is None
+    # The "More Like This" rail is fed by the enriched genre list.
+    assert d["similar"], "enriched genres must feed the genre-matched rail"
+    assert all(s["imdb_id"] != "tt9912345" for s in d["similar"])
+
+
+def test_imdb_degraded_details_without_wikipedia_keeps_banner_payload(
+    tmp_path, monkeypatch
+):
+    """Enrichment failure leaves exactly the payload the amber banner renders from."""
+    suggestion = json.dumps(
+        {"d": [{"id": "tt9912345", "l": "Inception", "y": 2010, "s": "Leonardo DiCaprio"}]}
+    )
+    session = FakeSession(
+        {
+            "/title/tt9912345/": FakeResponse(403, "Access Denied"),
+            "/suggestion/": FakeResponse(200, suggestion),
+        }
+    )
+    c = ImdbClient(cfg(), cache_dir=tmp_path, session=session)
+
+    with respx.mock(assert_all_called=False) as mock:
+        _stub_wiki(mock, monkeypatch, tmp_path, working=False)
+        d = c.movie_details("tt9912345")
+
+    assert d["overview"] == ""
+    assert d["genres"] == []
+    assert d["runtime"] is None
+    assert d["rating"] is None
+    assert d["degraded"] is True
+    assert d["similar"] == []
+    assert d["title"] == "Inception"
 
 
 def test_imdb_genre_fallback_has_no_duplicates(tmp_path):

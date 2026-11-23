@@ -20,11 +20,26 @@ class NyaaAdapter:
 
     async def search(self, q: Query) -> list[Release]:
         url = f"{self.base_url}/"
+        # Season/episode scoping (design D1): Sxx/Eyy tokens narrow the
+        # indexer's own results. Anime releases number episodes across the
+        # whole series, so the tokens are omitted there.
+        text = (q.text or "").strip()
+        if q.media_type == MediaType.TV and q.season is not None and not q.anime:
+            token = f"S{q.season:02d}"
+            if q.episode is not None:
+                token += f"E{q.episode:02d}"
+            text = f"{text} {token}".strip()
+        # NYAA's category axis is the subtitle language, not the media type
+        # (1_2 = Anime/English-translated, 1_3 = Non-English, 1_4 = Raw), and
+        # anime theatrical films are filed in the same 1_x categories as
+        # episodes — verified against the live site. So the anime movie/episode
+        # split cannot be requested here; the ranker rejects movie releases
+        # instead (see hard_filter's anime branch).
         resp = await self.http.get(
             url,
             key="nyaa",
             ttl_seconds=1800,
-            params={"page": "rss", "q": q.text, "c": "1_2", "f": "0"},
+            params={"page": "rss", "q": text, "c": "1_2", "f": "0"},
         )
         try:
             root = ET.fromstring(resp.content)

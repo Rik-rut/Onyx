@@ -8,6 +8,7 @@ import asyncio
 from arr import pipeline
 from arr.config.settings import DEFAULTS, Config
 from arr.core.models import Episode, MediaType, Release, Season, Series
+from arr.metadata.tvmaze import TvmazeError
 from arr.db import DB
 
 
@@ -1466,3 +1467,197 @@ def test_cancel_download_deletes_files_and_record(tmp_path, monkeypatch):
 
 
 
+
+
+def test_search_candidates_flags_anime_queries(tmp_path, monkeypatch):
+    """2.1: a TVMaze result whose genres include "Anime" marks the query anime
+    (adapters omit S/E tokens, the ranker skips the S/E gate); Western shows stay False."""
+    cfg = make_cfg(tmp_path)
+
+    def tvmaze_with_genres(genres):
+        class FakeTvm:
+            def __init__(self, *a, **k):
+                pass
+
+            def search_tv(self, query):
+                return {
+                    "id": 495,
+                    "name": "Naruto",
+                    "genres": genres,
+                    "externals": {"imdb": "tt0409591"},
+                }
+
+        monkeypatch.setattr(pipeline, "TvmazeClient", FakeTvm)
+
+    async def no_releases(q, c):
+        return []
+
+    monkeypatch.setattr(pipeline, "_fan_out", no_releases)
+
+    tvmaze_with_genres(["Action", "Anime", "Fantasy"])
+    _, _, anime_q = asyncio.run(
+        pipeline.search_candidates(MediaType.TV, "Naruto", cfg, season=1)
+    )
+    assert anime_q.anime is True
+    assert anime_q.tmdb_id == 495
+
+    tvmaze_with_genres(["Drama", "Crime"])
+    _, _, western_q = asyncio.run(
+        pipeline.search_candidates(MediaType.TV, "Breaking Bad", cfg, season=2)
+    )
+    assert western_q.anime is False
+
+
+def _anime_tvmaze(seasons, tmdb_id=41469, genres=("Action", "Anime"), boom=False):
+    """A TVMaze stub that reports the show as anime and serves its season shape."""
+
+    class FakeTvm:
+        def __init__(self, *a, **k):
+            pass
+
+        def search_tv(self, query):
+            return {
+                "id": tmdb_id,
+                "name": "Demon Slayer",
+                "genres": list(genres),
+                "externals": {"imdb": "tt2341771"},
+            }
+
+        def full_series(self, tid):
+            if boom:
+                raise TvmazeError("episode listing unavailable")
+            return Series(
+                tmdb_id=tid,
+                title="Demon Slayer",
+                seasons=[
+                    Season(
+                        season_number=number,
+                        episodes=[
+                            Episode(
+                                tmdb_id=tid,
+                                season_number=number,
+                                episode_number=e,
+                            )
+                            for e in numbers
+                        ],
+                    )
+                    for number, numbers in seasons
+                ],
+            )
+
+    return FakeTvm
+
+
+DEMON_SLAYER_SEASONS = [
+    (1, list(range(1, 27))),
+    (2, list(range(1, 19))),
+    (3, list(range(1, 12))),
+    (4, list(range(1, 9))),
+]
+
+
+def test_search_candidates_matches_bare_numbers_for_first_season(tmp_path, monkeypatch):
+    """Demon Slayer's TVMaze seasons restart at 1 per arc; season 1's local
+    numbers are still the global ones, so bare numbers may scope it."""
+    cfg = make_cfg(tmp_path)
+    monkeypatch.setattr(pipeline, "TvmazeClient", _anime_tvmaze(DEMON_SLAYER_SEASONS))
+
+    async def no_releases(q, c):
+        return []
+
+    monkeypatch.setattr(pipeline, "_fan_out", no_releases)
+
+    _, _, episode_q = asyncio.run(
+        pipeline.search_candidates(MediaType.TV, "Demon Slayer", cfg, season=1, episode=1)
+    )
+    assert episode_q.anime_number_match == [1]
+
+    _, _, season_q = asyncio.run(
+        pipeline.search_candidates(MediaType.TV, "Demon Slayer", cfg, season=1)
+    )
+    assert season_q.anime_number_match == list(range(1, 27))
+
+
+def test_search_candidates_keeps_legacy_scoping_for_local_seasons(tmp_path, monkeypatch):
+    """Season 2's "05" is ambiguous with season 1's "05", so no number filter
+    is applied — today's title-based behavior, never an empty drawer."""
+    cfg = make_cfg(tmp_path)
+    monkeypatch.setattr(pipeline, "TvmazeClient", _anime_tvmaze(DEMON_SLAYER_SEASONS))
+
+    async def no_releases(q, c):
+        return []
+
+    monkeypatch.setattr(pipeline, "_fan_out", no_releases)
+
+    _, _, season_q = asyncio.run(
+        pipeline.search_candidates(
+            MediaType.TV, "Demon Slayer", cfg, season=2, episode=5
+        )
+    )
+    assert season_q.anime_number_match is None
+
+
+def test_search_candidates_matches_bare_numbers_on_continuous_numbering(tmp_path, monkeypatch):
+    """Arc-numbered shows (continuous across seasons) scope every season."""
+    cfg = make_cfg(tmp_path)
+    globally_numbered = [(1, list(range(1, 27))), (2, list(range(27, 53)))]
+    monkeypatch.setattr(pipeline, "TvmazeClient", _anime_tvmaze(globally_numbered))
+
+    async def no_releases(q, c):
+        return []
+
+    monkeypatch.setattr(pipeline, "_fan_out", no_releases)
+
+    _, _, season_q = asyncio.run(
+        pipeline.search_candidates(
+            MediaType.TV, "Demon Slayer", cfg, season=2, episode=30
+        )
+    )
+    assert season_q.anime_number_match == [30]
+
+    _, _, season_only = asyncio.run(
+        pipeline.search_candidates(MediaType.TV, "Demon Slayer", cfg, season=2)
+    )
+    assert season_only.anime_number_match == list(range(27, 53))
+
+
+def test_search_candidates_survives_unknown_numbering(tmp_path, monkeypatch):
+    """An episode-listing failure leaves the legacy path, not a broken search."""
+    cfg = make_cfg(tmp_path)
+    monkeypatch.setattr(
+        pipeline, "TvmazeClient", _anime_tvmaze(DEMON_SLAYER_SEASONS, boom=True)
+    )
+
+    async def no_releases(q, c):
+        return []
+
+    monkeypatch.setattr(pipeline, "_fan_out", no_releases)
+
+    accepted, scored, q = asyncio.run(
+        pipeline.search_candidates(MediaType.TV, "Demon Slayer", cfg, season=1, episode=1)
+    )
+    assert q.anime is True and q.anime_number_match is None
+    assert accepted == []
+
+
+def test_search_candidates_leaves_number_match_unset_for_western_shows(tmp_path, monkeypatch):
+    """Western shows keep the existing SxxExx gate, untouched by this field."""
+    cfg = make_cfg(tmp_path)
+    monkeypatch.setattr(
+        pipeline,
+        "TvmazeClient",
+        _anime_tvmaze(
+            [(1, list(range(1, 27)))], genres=("Drama", "Crime")
+        ),
+    )
+
+    async def no_releases(q, c):
+        return []
+
+    monkeypatch.setattr(pipeline, "_fan_out", no_releases)
+
+    _, _, q = asyncio.run(
+        pipeline.search_candidates(MediaType.TV, "Breaking Bad", cfg, season=1, episode=1)
+    )
+    assert q.anime is False
+    assert q.anime_number_match is None

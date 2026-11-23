@@ -79,6 +79,26 @@ def _norm_resolution(raw: Any) -> str | None:
     return f"{s}p" if s.isdigit() else str(raw)
 
 
+def _norm_group(raw: Any) -> str | None:
+    if not raw:
+        return None
+    if isinstance(raw, list):
+        raw = raw[0] if raw else None
+        if not raw:
+            return None
+    return str(raw)
+
+
+def _norm_seasons(raw: Any) -> list[int] | None:
+    """Seasons covered by a release name: one int, several for multi-season packs."""
+    if isinstance(raw, list):
+        values = [v for v in raw if isinstance(v, int) and not isinstance(v, bool)]
+        return sorted(set(values)) or None
+    if isinstance(raw, int) and not isinstance(raw, bool):
+        return [raw]
+    return None
+
+
 def parse_release(title: str) -> dict[str, Any]:
     g = guessit(title)
     out: dict[str, Any] = {
@@ -86,10 +106,11 @@ def parse_release(title: str) -> dict[str, Any]:
         "year": g.get("year"),
         "season": g.get("season") if isinstance(g.get("season"), int) else None,
         "episode": g.get("episode") if isinstance(g.get("episode"), int) else None,
+        "seasons": _norm_seasons(g.get("season")),
         "resolution": _norm_resolution(g.get("screen_size")),
         "source": _norm_source(g.get("source")),
         "codec": _norm_codec(g.get("video_codec")),
-        "group": g.get("release_group"),
+        "group": _norm_group(g.get("release_group")),
         "is_pack": (
             isinstance(g.get("season"), list)
             or bool(g.get("episode_list"))
@@ -102,12 +123,15 @@ def parse_release(title: str) -> dict[str, Any]:
         ),
         "is_proper": bool(g.get("proper")),
         "is_repack": bool(g.get("repack")),
+        "type": g.get("type") if isinstance(g.get("type"), str) else None,
     }
     return out
 
 
 def enrich_release(r: Release) -> Release:
     p = parse_release(r.title)
+    if not r.raw_title:
+        r.raw_title = r.title
     r.title = p["title"] if p["title"] else r.title
     r.year = r.year or p["year"]
     r.season = r.season if r.season is not None else p["season"]
@@ -116,16 +140,18 @@ def enrich_release(r: Release) -> Release:
     r.source = p["source"] or r.source
     r.codec = p["codec"] or r.codec
     r.group = p["group"] or r.group
+    r.seasons = r.seasons if r.seasons else p["seasons"]
     r.is_pack = r.is_pack or p["is_pack"]
-    r.is_proper = r.is_proper or p["is_proper"]
     r.is_repack = r.is_repack or p["is_repack"]
+    r.release_type = r.release_type or p["type"]
     return r
 
 
 def _is_bad(r: Release) -> bool:
-    hay = " ".join(filter(None, [r.title, r.source, r.resolution, r.group])).lower()
+    hay = " ".join(
+        str(v) for v in [r.title, r.source, r.resolution, r.group] if v is not None
+    ).lower()
     return any(b in hay for b in BAD_SOURCES)
-
 
 @dataclass
 class Scored:
@@ -136,6 +162,16 @@ class Scored:
 
 def _norm_tokens(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", s.lower()).strip()
+
+
+# Anime releases number episodes across the whole series, and guessit reads a
+# bare "215" as S02E15. Only a name that *states* a season may scope it out.
+_SEASON_TOKEN_RE = re.compile(r"\bs\d{1,2}\b|\bseason\s*\d", re.I)
+
+
+def _names_season(r: Release) -> bool:
+    """Whether the release name carries an explicit season token (S05/S5/Season 5)."""
+    return bool(_SEASON_TOKEN_RE.search(r.raw_title or r.title or ""))
 
 
 def _title_relevant(r: Release, q: Query) -> bool:
@@ -181,11 +217,42 @@ def hard_filter(r: Release, q: Query, profile: QualityProfile, cfg: dict) -> str
         return f"size {size_mb:.0f}MB < {min_mb}MB"
     if max_mb and size_mb and size_mb > float(max_mb):
         return f"size {size_mb:.0f}MB > {max_mb}MB"
-    if q.media_type == MediaType.TV and q.season is not None and not r.is_pack:
-        if r.season is not None and r.season != q.season:
-            return f"season {r.season} != {q.season}"
-        if q.episode is not None and r.episode is not None and r.episode != q.episode:
-            return f"episode {r.episode} != {q.episode}"
+    if q.media_type == MediaType.TV and q.season is not None and not q.anime:
+        if q.season_pack and not r.is_pack:
+            return "episode release not requested (season-pack search)"
+        if r.is_pack:
+            if q.exclude_packs:
+                return "season pack not offered for a single-episode request"
+            if r.season is not None and r.season != q.season:
+                return f"pack season {r.season} != {q.season}"
+        else:
+            if r.season is not None and r.season != q.season:
+                return f"season {r.season} != {q.season}"
+            if q.episode is not None and r.episode is not None and r.episode != q.episode:
+                return f"episode {r.episode} != {q.episode}"
+    if q.media_type == MediaType.TV and q.anime:
+        # Anime theatrical films never belong in TV release results
+        # (NYAA's category split keeps them out at the source; this is the
+        # ranker-level guarantee for other indexers and misparsed names).
+        if r.release_type == "movie":
+            return "anime movie release in TV release search"
+        # Only a name that states a season may scope an anime release out:
+        # a bare "215" is a global episode number that guessit reads as
+        # S02E15, and rejecting it would empty the drawer of real episodes.
+        if q.season is not None and _names_season(r):
+            if r.season is not None and r.season != q.season:
+                return f"release season {r.season} != requested {q.season}"
+            if r.seasons and q.season not in r.seasons:
+                return f"release seasons {r.seasons} do not cover {q.season}"
+        if (
+            q.anime_number_match
+            and r.episode is not None
+            and r.episode not in q.anime_number_match
+        ):
+            return (
+                f"episode {r.episode} outside requested scope "
+                f"{sorted(q.anime_number_match)}"
+            )
     if q.media_type == MediaType.MOVIE and q.imdb_id and r.imdb_id:
         if q.imdb_id.lower() != r.imdb_id.lower():
             return f"imdb_id {r.imdb_id} != {q.imdb_id}"

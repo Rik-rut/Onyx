@@ -241,6 +241,59 @@ def test_nyaa_search_movie_sets_movie_media_type():
     assert out[0].infohash == "cafe1234"
 
 
+def test_nyaa_search_appends_season_episode_tokens(tmp_path):
+    """2.2: non-anime TV queries carry Sxx/Eyy tokens; anime queries do not."""
+    isolated = HttpClient(cfg(), cache_dir=tmp_path)
+    with respx.mock:
+        route = respx.get("https://nyaa.si/").mock(
+            return_value=httpx.Response(200, text=NYAA_RSS)
+        )
+        adapter = NyaaAdapter("https://nyaa.si", isolated)
+        asyncio.run(
+            adapter.search(
+                Query(media_type=MediaType.TV, text="Show", season=2, episode=5)
+            )
+        )
+        assert route.calls.last.request.url.params["q"] == "Show S02E05"
+        asyncio.run(adapter.search(Query(media_type=MediaType.TV, text="Show", season=2)))
+        assert route.calls.last.request.url.params["q"] == "Show S02"
+        asyncio.run(
+            adapter.search(
+                Query(
+                    media_type=MediaType.TV,
+                    text="Naruto",
+                    season=2,
+                    episode=5,
+                    anime=True,
+                )
+            )
+        )
+        assert route.calls.last.request.url.params["q"] == "Naruto"
+
+
+
+def test_nyaa_category_is_language_scoped(tmp_path):
+    """NYAA has no movie/episode category (1_2/1_3/1_4 are the subtitle
+    languages and anime films are filed with episodes), so both media types
+    must keep requesting 1_2 — the anime movie exclusion belongs in the ranker.
+    A single-digit `c` value is rejected by nyaa with an HTML error page."""
+    isolated = HttpClient(cfg(), cache_dir=tmp_path)
+    with respx.mock:
+        route = respx.get("https://nyaa.si/").mock(
+            return_value=httpx.Response(200, text=NYAA_RSS)
+        )
+        adapter = NyaaAdapter("https://nyaa.si", isolated)
+        asyncio.run(
+            adapter.search(
+                Query(media_type=MediaType.TV, text="Demon Slayer", season=1, anime=True)
+            )
+        )
+        assert route.calls.last.request.url.params["c"] == "1_2"
+        asyncio.run(
+            adapter.search(Query(media_type=MediaType.MOVIE, text="Demon Slayer"))
+        )
+        assert route.calls.last.request.url.params["c"] == "1_2"
+
 
 def test_browser_session_lazy_init():
     """3.1: BrowserSession lazy-initialises on first get_context call."""
@@ -469,6 +522,45 @@ def test_tpb_adapter_search_stubbed_browser():
     # results are capped at the query limit.
     assert all(r.media_type == MediaType.TV for r in result)
     assert len(result) <= 50
+
+
+def test_tpb_search_appends_season_episode_tokens():
+    """2.2: Sxx/Eyy tokens join the TPB search text; anime queries send none."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from arr.core.models import Query
+    from arr.indexers.tpb import TpbAdapter
+
+    adapter = TpbAdapter("https://thepiratebay.org", http())
+
+    mock_context = AsyncMock()
+    mock_page = AsyncMock()
+    mock_page.content = AsyncMock(return_value="")
+    mock_page.goto = AsyncMock(return_value=MagicMock())
+    mock_page.close = AsyncMock()
+    mock_context.new_page = AsyncMock(return_value=mock_page)
+
+    with patch.object(adapter._browser, "get_context", new_callable=AsyncMock, return_value=mock_context):
+        asyncio.run(
+            adapter.search(Query(media_type=MediaType.TV, text="Show", season=2, episode=5))
+        )
+        assert "S02E05" in mock_page.goto.call_args[0][0]
+
+        asyncio.run(adapter.search(Query(media_type=MediaType.TV, text="Show", season=2)))
+        assert "S02" in mock_page.goto.call_args[0][0]
+
+        asyncio.run(
+            adapter.search(
+                Query(
+                    media_type=MediaType.TV,
+                    text="Naruto",
+                    season=2,
+                    episode=5,
+                    anime=True,
+                )
+            )
+        )
+        assert "S02" not in mock_page.goto.call_args[0][0]
 
 
 def test_build_adapters_includes_tpb_when_enabled():

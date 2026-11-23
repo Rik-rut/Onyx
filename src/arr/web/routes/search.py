@@ -7,8 +7,8 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi import Query as FastQuery
 from pydantic import BeforeValidator
 
-from arr.core.models import MediaType
-from arr.core.parsing import explain
+from arr.core.models import MediaType, Release
+from arr.core.parsing import Scored, explain
 from arr.log import get_logger
 from arr.metadata.imdb import ImdbClient
 from arr.metadata.tvmaze import TvmazeClient
@@ -63,6 +63,63 @@ def annotate_availability(
     return out
 
 
+def _season_label(r: Release) -> str | None:
+    """S/E coverage of a release name: S02E05, S02, S01-S05, or EP045."""
+    if r.season is not None and r.episode is not None:
+        return f"S{r.season:02d}E{r.episode:02d}"
+    seasons = sorted({s for s in (r.seasons or []) if isinstance(s, int)})
+    if not seasons and r.season is not None:
+        seasons = [r.season]
+    if seasons:
+        if len(seasons) == 1:
+            return f"S{seasons[0]:02d}"
+        return f"S{seasons[0]:02d}-S{seasons[-1]:02d}"
+    if r.episode is not None:
+        # Anime releases number episodes globally without season tokens
+        # ("Demon Slayer -Kimetsu no Yaiba- 045 [...]").
+        return f"EP{r.episode:03d}"
+    return None
+
+
+def _release_row(r: Release, s: Scored | None) -> dict[str, Any]:
+    """Endpoint row for a ranked release: score, coverage, and raw name."""
+    if s is not None and isinstance(s.score, dict):
+        score_val = max(
+            0,
+            1000 - s.score.get("resolution_rank", 10) * 100 + s.score.get("seeders", 0),
+        )
+    elif s is not None and isinstance(s.score, (int, float)):
+        score_val = s.score
+    else:
+        score_val = 0
+    reasons: list[str] = []
+    if s is not None:
+        try:
+            reasons = [explain([s])]
+        except Exception:
+            reasons = [f"Score: {score_val}"]
+    return {
+        "indexer": r.indexer,
+        "title": r.title,
+        "raw_title": r.raw_title or None,
+        "infohash": r.infohash,
+        "magnet": r.magnet,
+        "seeds": r.seeds,
+        "peers": r.peers,
+        "size_bytes": r.size_bytes,
+        "resolution": r.resolution or r.quality,
+        "codec": r.codec,
+        "source": r.source,
+        "score": score_val,
+        "is_pack": r.is_pack,
+        "season": r.season,
+        "episode": r.episode,
+        "seasons": r.seasons,
+        "season_label": _season_label(r),
+        "reasons": reasons,
+    }
+
+
 @router.get("/search/movies")
 async def search_movies(
     request: Request, q: str = FastQuery(..., min_length=1)
@@ -72,6 +129,12 @@ async def search_movies(
     logger.info(f"Searching movies (IMDb): '{q}'")
     try:
         results = await asyncio.to_thread(imdb.search_movies, q)
+        # The unified search page splits results by media type; TV-typed IMDb
+        # suggestions must not leak into the Movies section.
+        results = [
+            r for r in results
+            if "tv" not in str(r.get("type") or "").lower()
+        ]
         logger.info(f"Found {len(results)} movie result(s) for '{q}'")
         return await asyncio.to_thread(annotate_availability, cfg, results, "movie")
     except Exception as e:
@@ -202,41 +265,7 @@ async def get_movie_releases(
             MediaType.MOVIE, title, cfg, year=year, imdb_id=imdb_id, title=title
         )
         scored_map = {s.release.infohash: s for s in scored_list}
-
-        out: list[dict[str, Any]] = []
-        for r in releases:
-            s = scored_map.get(r.infohash)
-            if s and isinstance(s.score, dict):
-                score_val = max(
-                    0, 1000 - s.score.get("resolution_rank", 10) * 100 + s.score.get("seeders", 0)
-                )
-            elif s and isinstance(s.score, (int, float)):
-                score_val = s.score
-            else:
-                score_val = 0
-            reasons = []
-            if s:
-                try:
-                    reasons = [explain([s])]
-                except Exception:
-                    reasons = [f"Score: {score_val}"]
-            out.append(
-                {
-                    "indexer": r.indexer,
-                    "title": r.title,
-                    "infohash": r.infohash,
-                    "magnet": r.magnet,
-                    "seeds": r.seeds,
-                    "peers": r.peers,
-                    "size_bytes": r.size_bytes,
-                    "resolution": r.resolution or r.quality,
-                    "codec": r.codec,
-                    "source": r.source,
-                    "score": score_val,
-                    "is_pack": r.is_pack,
-                    "reasons": reasons,
-                }
-            )
+        out = [_release_row(r, scored_map.get(r.infohash)) for r in releases]
         logger.info(f"Found {len(out)} release candidate(s) for movie '{title}'")
         return out
     except Exception as e:
@@ -267,43 +296,13 @@ async def get_tv_releases(
             season=season,
             episode=episode,
             title=title,
+            season_pack=pack,
+            # A single-episode request never offers season packs (spec:
+            # "episode Releases -> no packs"); a pack search wants packs only.
+            exclude_packs=(episode is not None) and (not pack),
         )
         scored_map = {s.release.infohash: s for s in scored_list}
-
-        out: list[dict[str, Any]] = []
-        for r in releases:
-            s = scored_map.get(r.infohash)
-            if s and isinstance(s.score, dict):
-                score_val = max(
-                    0, 1000 - s.score.get("resolution_rank", 10) * 100 + s.score.get("seeders", 0)
-                )
-            elif s and isinstance(s.score, (int, float)):
-                score_val = s.score
-            else:
-                score_val = 0
-            reasons = []
-            if s:
-                try:
-                    reasons = [explain([s])]
-                except Exception:
-                    reasons = [f"Score: {score_val}"]
-            out.append(
-                {
-                    "indexer": r.indexer,
-                    "title": r.title,
-                    "infohash": r.infohash,
-                    "magnet": r.magnet,
-                    "seeds": r.seeds,
-                    "peers": r.peers,
-                    "size_bytes": r.size_bytes,
-                    "resolution": r.resolution or r.quality,
-                    "codec": r.codec,
-                    "source": r.source,
-                    "score": score_val,
-                    "is_pack": r.is_pack,
-                    "reasons": reasons,
-                }
-            )
+        out = [_release_row(r, scored_map.get(r.infohash)) for r in releases]
         logger.info(f"Found {len(out)} release candidate(s) for TV '{title}' ({ep_str})")
         return out
     except Exception as e:

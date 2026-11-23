@@ -55,6 +55,9 @@ class Query(BaseModel):
     season: int | None = None
     episode: int | None = None
     season_pack: bool = False
+    anime: bool = False
+    anime_number_match: list[int] | None = None
+    exclude_packs: bool = False
     limit: int = 50
 
 
@@ -71,6 +74,8 @@ class Release(BaseModel):
     year: int | None = None
     season: int | None = None
     episode: int | None = None
+    raw_title: str = ""
+    seasons: list[int] | None = None
     is_pack: bool = False
     tmdb_id: int | None = None
     imdb_id: str | None = None
@@ -82,6 +87,7 @@ class Release(BaseModel):
     group: str | None = None
     is_proper: bool = False
     is_repack: bool = False
+    release_type: str | None = None
 
 
 class QualityProfile(BaseModel):

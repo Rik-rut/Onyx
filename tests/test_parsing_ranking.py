@@ -1,5 +1,5 @@
 from arr.core.models import MediaType, QualityProfile, Query, Release
-from arr.core.parsing import explain, hard_filter, parse_release, rank
+from arr.core.parsing import enrich_release, explain, hard_filter, parse_release, rank
 
 
 def mk(title, seeds=10, size_mb=2000, indexer="yts", **kw):
@@ -215,3 +215,216 @@ def test_rank_stable_with_indexer_priority():
     scored = rank(releases, q, QualityProfile(), cfg)
     assert scored[0].release.indexer == "yts"
     assert scored[1].release.indexer == "eztv"
+
+
+BAD_NYAA_TITLE = (
+    "[DB] Kimetsu no Yaiba | Demon Slayer: Kimetsu no Yaiba (Season 1+2+3+4+5+Movie) "
+    "[Dual Audio 10bit BD1080p][HEVC-x265][BDRip][Sub-Eng-Chi-Jap]-ANiGMA"
+)
+
+
+def test_parse_known_bad_nyaa_title_yields_string_fields():
+    """1.1: guessit's list-typed release_group must not leak past the parse boundary."""
+    p = parse_release(BAD_NYAA_TITLE)
+    assert isinstance(p["group"], str)
+    # rank() completes without raising, whatever the verdict is
+    r = mk(BAD_NYAA_TITLE, media_type=MediaType.TV)
+    q = Query(media_type=MediaType.TV, text="demon slayer")
+    cfg = {"min_seeders": 0, "resolutions": ["2160p", "1080p", "720p"], "title_strict_indexers": []}
+    out = rank([r], q, QualityProfile(), cfg)
+    assert len(out) == 1
+    assert out[0].release.group is None or isinstance(out[0].release.group, str)
+    # The raw name is preserved for the drawer's coverage display.
+    assert out[0].release.raw_title == BAD_NYAA_TITLE
+
+
+def test_rank_completes_with_list_typed_fields():
+    """1.2: values smuggled in as lists (pydantic v2 does not validate on assignment)
+    must not crash _is_bad or rank."""
+    r = mk("Show S01E01 1080p WEB x264", media_type=MediaType.TV)
+    r.group = ["GroupA", "GroupB"]  # type: ignore[assignment]
+    r.source = ["WEB", "HDTV"]  # type: ignore[assignment]
+    q = Query(media_type=MediaType.TV, season=1, episode=1)
+    cfg = {"min_seeders": 0, "resolutions": ["1080p"], "title_strict_indexers": []}
+    out = rank([r], q, QualityProfile(), cfg)
+    assert len(out) == 1
+    assert out[0].release is r
+
+
+def test_pack_wrong_season_rejected():
+    """2.3: an S03 pack is rejected for a season=2 query."""
+    r = mk("Show.S03.COMPLETE.1080p.BluRay.x264", media_type=MediaType.TV)
+    q = Query(media_type=MediaType.TV, text="Show", season=2)
+    cfg = {"min_seeders": 0, "resolutions": ["1080p"], "title_strict_indexers": []}
+    s = rank([r], q, QualityProfile(), cfg)[0]
+    assert s.rejected is not None and "pack season" in s.rejected
+
+
+def test_pack_matching_season_accepted():
+    """2.3: an S02 pack is accepted for a season=2 query."""
+    r = mk("Show.S02.COMPLETE.1080p.BluRay.x264", media_type=MediaType.TV)
+    q = Query(media_type=MediaType.TV, text="Show", season=2)
+    cfg = {"min_seeders": 0, "resolutions": ["1080p"], "title_strict_indexers": []}
+    s = rank([r], q, QualityProfile(), cfg)[0]
+    assert s.rejected is None
+
+
+def test_packs_rejected_when_excluded():
+    """2.3: the endpoint's single-episode contract (exclude_packs) drops even
+    in-season packs."""
+    r = mk("Show.S02.COMPLETE.1080p.BluRay.x264", media_type=MediaType.TV)
+    q = Query(media_type=MediaType.TV, text="Show", season=2, episode=5, exclude_packs=True)
+    cfg = {"min_seeders": 0, "resolutions": ["1080p"], "title_strict_indexers": []}
+    s = rank([r], q, QualityProfile(), cfg)[0]
+    assert s.rejected is not None and "pack" in s.rejected
+
+
+def test_per_episode_query_without_flag_keeps_packs():
+    """Monitor-flow guard: _enqueue_episodes queries carry season+episode but must
+    still see season packs (prefer_season_packs depends on it)."""
+    r = mk("Show.S02.COMPLETE.1080p.BluRay.x264", media_type=MediaType.TV)
+    q = Query(media_type=MediaType.TV, text="Show", season=2, episode=5)
+    cfg = {"min_seeders": 0, "resolutions": ["1080p"], "title_strict_indexers": []}
+    s = rank([r], q, QualityProfile(), cfg)[0]
+    assert s.rejected is None
+
+
+def test_anime_query_skips_se_gate():
+    """2.3: an anime query accepts a release with no SxxExx designation at all
+    (NYAA titles carry global episode numbers, not seasons)."""
+    r = mk("Naruto 215 1080p", media_type=MediaType.TV)
+    q = Query(media_type=MediaType.TV, text="Naruto", season=1, episode=2, anime=True)
+    cfg = {"min_seeders": 0, "resolutions": ["1080p"], "title_strict_indexers": []}
+    s = rank([r], q, QualityProfile(), cfg)[0]
+    assert s.rejected is None
+
+
+# ---------------- anime release scoping (fix-movie-metadata-anime-scoping) ----------------
+
+ANIME_CFG = {"min_seeders": 0, "resolutions": ["1080p"], "title_strict_indexers": []}
+
+
+def _anime_query(**kw):
+    return Query(
+        media_type=MediaType.TV,
+        text="Demon Slayer",
+        season=kw.pop("season", 1),
+        episode=kw.pop("episode", None),
+        anime=True,
+        **kw,
+    )
+
+
+def _ranked(r, q, cfg=None):
+    return rank([r], q, QualityProfile(), cfg or ANIME_CFG)[0]
+
+
+def test_parse_carries_release_type():
+    """guessit's movie/episode distinction must survive the parse boundary."""
+    movie = parse_release(
+        "Demon Slayer -Kimetsu no Yaiba- The Movie - Infinity Castle (2025) 1080p"
+    )
+    assert movie["type"] == "movie"
+    episode = parse_release("Demon Slayer -Kimetsu no Yaiba- 045 [1080p]")
+    assert episode["episode"] == 45
+    assert episode["type"] == "episode"
+
+
+def test_enrich_release_carries_type():
+    """The ranker sees the type, so it can scope without indexer help."""
+    r = Release(
+        indexer="nyaa",
+        title="Demon Slayer -Kimetsu no Yaiba- The Movie - Infinity Castle (2025) 1080p",
+        infohash="0" * 40,
+        magnet="magnet:?xt=urn:btih:" + "0" * 40,
+        media_type=MediaType.TV,
+    )
+    assert enrich_release(r).release_type == "movie"
+
+
+def test_anime_query_rejects_theatrical_movie_release():
+    """The Infinity Castle movie must never sit in an episode's release list."""
+    r = mk(
+        "Demon Slayer -Kimetsu no Yaiba- The Movie - Infinity Castle (2025) 1080p",
+        media_type=MediaType.TV,
+    )
+    s = _ranked(r, _anime_query(episode=1))
+    assert s.rejected is not None and "anime movie release" in s.rejected
+
+
+def test_anime_release_tagged_to_other_season_rejected():
+    """A release carrying an explicit S5 token is out of scope for season 1."""
+    r = mk(
+        "[Salieri] Demon Slayer -Kimetsu no Yaiba- S5 - Hashira Training Arc (1080p)",
+        media_type=MediaType.TV,
+    )
+    s = _ranked(r, _anime_query(episode=1))
+    assert s.rejected is not None and "release season 5" in s.rejected
+
+
+def test_anime_pack_without_requested_season_rejected():
+    """An S4+S5 pack does not cover the requested season."""
+    r = mk("[Tenrai-Sensei] Demon Slayer -Kimetsu no Yaiba- S4+S5 (1080p)", media_type=MediaType.TV)
+    s = _ranked(r, _anime_query(episode=1))
+    assert s.rejected is not None and "do not cover 1" in s.rejected
+
+
+def test_anime_pack_covering_requested_season_passes():
+    """The Season 1-4 + Movie pack does cover season 1, so it stays offered."""
+    r = mk("Demon Slayer -Kimetsu no Yaiba- Season 1-4 + Movie [1080p]", media_type=MediaType.TV)
+    q = _anime_query(season=2)
+    assert _ranked(r, q).rejected is None
+
+
+def test_anime_bare_number_outside_scope_rejected():
+    """Episode 45 is outside the requested scope when numbering is trusted."""
+    r = mk("Demon Slayer -Kimetsu no Yaiba- 045 [1080p]", media_type=MediaType.TV)
+    q = _anime_query(episode=1, anime_number_match=[1])
+    s = _ranked(r, q)
+    assert s.rejected is not None and "outside requested scope" in s.rejected
+
+
+def test_anime_bare_number_in_scope_passes():
+    r = mk("Demon Slayer -Kimetsu no Yaiba- 001 (1080p) [SubsPlease]", media_type=MediaType.TV)
+    q = _anime_query(episode=1, anime_number_match=[1])
+    assert _ranked(r, q).rejected is None
+
+
+def test_anime_unnumbered_release_survives_number_filter():
+    """Number matching only applies to releases that carry a number."""
+    r = mk("Demon Slayer -Kimetsu no Yaiba- Season 1-4 + Movie [1080p]", media_type=MediaType.TV)
+    q = _anime_query(episode=1, anime_number_match=[1])
+    assert _ranked(r, q).rejected is None
+
+
+def test_anime_number_filter_inert_when_unset():
+    """Locally-numbered shows (Demon Slayer S2+) keep title-based results."""
+    r = mk("Demon Slayer -Kimetsu no Yaiba- 045 [1080p]", media_type=MediaType.TV)
+    q = _anime_query(season=2)
+    assert q.anime_number_match is None
+    assert _ranked(r, q).rejected is None
+
+
+def test_anime_bare_number_not_scoped_as_a_season():
+    """"Naruto 215" is global episode 215; guessit's S02E15 reading of that
+    number must not scope the release out of a season-1 query."""
+    r = mk("Naruto 215 1080p", media_type=MediaType.TV)
+    q = Query(
+        media_type=MediaType.TV, text="Naruto", season=1, episode=2, anime=True
+    )
+    assert _ranked(r, q).rejected is None
+
+
+def test_western_gate_outcomes_unchanged():
+    """The new anime branch must not move a single Western TV outcome."""
+    wrong = mk("Breaking.Bad.S05E14.1080p.WEB-DL.x264", media_type=MediaType.TV)
+    q = Query(media_type=MediaType.TV, text="Breaking Bad", season=2, episode=14)
+    s = _ranked(wrong, q)
+    assert s.rejected is not None and "season 5 != 2" in s.rejected
+
+    right = mk("Breaking.Bad.S02E14.1080p.WEB-DL.x264", media_type=MediaType.TV)
+    assert _ranked(right, q).rejected is None
+
+    # A movie-typed name is not rejected for being a movie on a Western query.
+    movie_like = mk("Inception.2010.1080p.BluRay.x265", media_type=MediaType.TV)
+    assert _ranked(movie_like, q).rejected is None

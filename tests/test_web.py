@@ -8,7 +8,7 @@ import pytest
 from starlette.testclient import TestClient
 
 from arr.config.settings import DEFAULTS, Config
-from arr.core.models import MediaType, Release
+from arr.core.models import Episode, MediaType, Release, Season, Series
 from arr.core.parsing import Scored
 from arr.web.app import create_app
 
@@ -171,6 +171,323 @@ def test_api_releases_movie_accepts_blank_year_and_imdb(client: TestClient) -> N
     assert resp.status_code == 200
     assert mock_search.await_args.kwargs.get("year") is None
     assert mock_search.await_args.kwargs.get("imdb_id") is None
+
+
+BAD_NYAA_TITLE = (
+    "[DB] Kimetsu no Yaiba | Demon Slayer: Kimetsu no Yaiba (Season 1+2+3+4+5+Movie) "
+    "[Dual Audio 10bit BD1080p][HEVC-x265][BDRip][Sub-Eng-Chi-Jap]-ANiGMA"
+)
+
+
+def _tv(title: str, seeds: int = 50, indexer: str = "fake") -> Release:
+    h = (title[:10] or "x").ljust(40, "0")
+    return Release(
+        indexer=indexer,
+        title=title,
+        infohash=h,
+        magnet=f"magnet:?xt=urn:btih:{h}",
+        media_type=MediaType.TV,
+        seeds=seeds,
+        size_bytes=1_500_000_000,
+    )
+
+
+def test_api_releases_tv_survives_malformed_release_name(client: TestClient) -> None:
+    """1.3: the known-bad NYAA pack title used to 500 the endpoint via a
+    list-typed release_group; it must now rank cleanly and stay out of the way."""
+    good = _tv("Show.S02E05.1080p.WEB-DL.x264")
+    bad = _tv(BAD_NYAA_TITLE, indexer="nyaa")
+
+    async def fan_out(q, cfg):
+        return [good.model_copy(deep=True), bad.model_copy(deep=True)]
+
+    with patch("arr.pipeline._fan_out", new=fan_out), patch(
+        "arr.metadata.tvmaze.TvmazeClient.search_tv", return_value=None
+    ):
+        resp = client.get("/api/releases/tv?title=Show&season=2")
+    assert resp.status_code == 200
+    rows = resp.json()
+    assert any(row["infohash"] == good.infohash for row in rows)
+    # The malformed release must not poison the response either way it ranks.
+    bad_rows = [row for row in rows if row["infohash"] == bad.infohash]
+    for row in bad_rows:
+        assert isinstance(row.get("group"), (str, type(None)))
+
+
+def test_api_releases_tv_pack_query_returns_only_covering_packs(
+    client: TestClient,
+) -> None:
+    """2.4: pack=true returns only season packs covering the requested season."""
+    releases = [
+        _tv("Show.S01.COMPLETE.1080p.BluRay.x264", seeds=300),
+        _tv("Show.S02.COMPLETE.1080p.BluRay.x264", seeds=50),
+        _tv("Show.S03.COMPLETE.1080p.BluRay.x264", seeds=200),
+        _tv("Show.S02E05.1080p.WEB-DL.x264", seeds=900),
+    ]
+
+    async def fan_out(q, cfg):
+        return [r.model_copy(deep=True) for r in releases]
+
+    with patch("arr.pipeline._fan_out", new=fan_out), patch(
+        "arr.metadata.tvmaze.TvmazeClient.search_tv", return_value=None
+    ):
+        resp = client.get("/api/releases/tv?title=Show&season=2&pack=true")
+    assert resp.status_code == 200
+    rows = resp.json()
+    assert len(rows) == 1
+    assert rows[0]["is_pack"] is True
+    assert rows[0]["season_label"] == "S02"
+
+def test_api_releases_tv_episode_query_has_no_packs(
+    client: TestClient,
+) -> None:
+    """2.4: a single-episode request never offers season packs."""
+    releases = [
+        _tv("Show.S02.COMPLETE.1080p.BluRay.x264", seeds=300),
+        _tv("Show.S02E05.1080p.WEB-DL.x264", seeds=50),
+    ]
+    seen_queries: list = []
+
+    async def fan_out(q, cfg):
+        seen_queries.append(q)
+        return [r.model_copy(deep=True) for r in releases]
+
+    with patch("arr.pipeline._fan_out", new=fan_out), patch(
+        "arr.metadata.tvmaze.TvmazeClient.search_tv", return_value=None
+    ):
+        resp = client.get("/api/releases/tv?title=Show&season=2&episode=5")
+    assert resp.status_code == 200
+    rows = resp.json()
+    assert len(rows) == 1
+    assert rows[0]["is_pack"] is False
+    assert rows[0]["season_label"] == "S02E05"
+    # The exclusion is signalled via the flag, not inferred from episode=.
+    assert seen_queries and seen_queries[0].exclude_packs is True
+    assert seen_queries[0].episode == 5
+
+
+def test_api_releases_rows_carry_coverage_fields(client: TestClient) -> None:
+    """2.5: rows expose raw_title/season/episode/season_label so the drawer can
+    show what a release actually covers."""
+    multi = _tv("Show.S01.S02.S03.COMPLETE.1080p.BluRay.x264", seeds=100)
+    single = _tv("Show.S02E05.1080p.WEB-DL.x264")
+    bare = _tv("Demon Slayer -Kimetsu no Yaiba- 045 [1080p]")
+
+    async def fan_out(q, cfg):
+        return [
+            multi.model_copy(deep=True),
+            single.model_copy(deep=True),
+            bare.model_copy(deep=True),
+        ]
+
+    with patch("arr.pipeline._fan_out", new=fan_out), patch(
+        "arr.metadata.tvmaze.TvmazeClient.search_tv", return_value=None
+    ):
+        resp = client.get("/api/releases/tv?title=Show&season=2")
+    assert resp.status_code == 200
+    rows = {row["infohash"]: row for row in resp.json()}
+    s_row = rows[single.infohash]
+    assert s_row["season"] == 2
+    assert s_row["episode"] == 5
+    assert s_row["season_label"] == "S02E05"
+    assert s_row["raw_title"] == "Show.S02E05.1080p.WEB-DL.x264"
+    m_row = rows[multi.infohash]
+    assert m_row["seasons"] == [1, 2, 3]
+    assert m_row["season_label"] == "S01-S03"
+    assert "S01.S02.S03" in (m_row["raw_title"] or "")
+    # Anime releases named by bare episode number must say which one they are.
+    b_row = rows[bare.infohash]
+    assert b_row["season_label"] == "EP045"
+    assert b_row["season"] is None
+    assert b_row["episode"] == 45
+
+
+def test_api_releases_tv_best_row_covers_requested_season(
+    client: TestClient,
+) -> None:
+    """3.2: with a mixed S01/S02/S03 candidate set, "Download Best" (client-side
+    max score) can no longer pick another season's release."""
+    releases = [
+        _tv("Show.S01.COMPLETE.2160p.BluRay.x265", seeds=5000),
+        _tv("Show.S02.COMPLETE.1080p.BluRay.x264", seeds=50),
+        _tv("Show.S03.COMPLETE.1080p.BluRay.x264", seeds=2000),
+    ]
+
+    async def fan_out(q, cfg):
+        return [r.model_copy(deep=True) for r in releases]
+
+    with patch("arr.pipeline._fan_out", new=fan_out), patch(
+        "arr.metadata.tvmaze.TvmazeClient.search_tv", return_value=None
+    ):
+        resp = client.get("/api/releases/tv?title=Show&season=2")
+    assert resp.status_code == 200
+    rows = resp.json()
+    assert rows, "expected at least one accepted release"
+    best = max(rows, key=lambda row: row["score"])
+    assert best["season_label"] == "S02"
+    # The S01/S03 packs are rejected by the ranker, not just sorted lower.
+    assert [row["season_label"] for row in rows] == ["S02"]
+
+
+def _anime_release(title: str, index: int, seeds: int = 50, media_type=MediaType.TV) -> Release:
+    """A distinct release row (infohash from the index, not the shared prefix)."""
+    h = f"{index:040d}"
+    return Release(
+        indexer="nyaa",
+        title=title,
+        infohash=h,
+        magnet=f"magnet:?xt=urn:btih:{h}",
+        media_type=media_type,
+        seeds=seeds,
+        size_bytes=1_500_000_000,
+    )
+
+
+def _demon_slayer_series() -> Series:
+    """Demon Slayer's TVMaze shape: four arcs, each numbered from 1."""
+    return Series(
+        tmdb_id=41469,
+        title="Demon Slayer",
+        seasons=[
+            Season(
+                season_number=number,
+                episodes=[
+                    Episode(
+                        tmdb_id=41469,
+                        season_number=number,
+                        episode_number=e,
+                    )
+                    for e in range(1, count + 1)
+                ],
+            )
+            for number, count in ((1, 26), (2, 18), (3, 11), (4, 8))
+        ],
+    )
+
+
+def test_api_releases_tv_anime_excludes_movies_and_other_seasons(
+    client: TestClient,
+) -> None:
+    """Defect B: the reported "all mixed up" Demon Slayer S1E1 drawer.
+
+    The candidate set mirrors the live baseline that returned 13 rows with zero
+    S1E1 — a theatrical movie, an S5-tagged release, a bare episode 45, plus
+    the requested bare episode 1 and an unnumbered pack, which must survive.
+    """
+    movie = _anime_release(
+        "Demon Slayer -Kimetsu no Yaiba- The Movie - Infinity Castle (2025) 1080p", 1
+    )
+    s5 = _anime_release(
+        "[Salieri] Demon Slayer -Kimetsu no Yaiba- S5 - Hashira Training Arc (1080p)", 2
+    )
+    ep45 = _anime_release("Demon Slayer -Kimetsu no Yaiba- 045 [1080p]", 3)
+    ep1 = _anime_release("Demon Slayer -Kimetsu no Yaiba- 001 (1080p) [SubsPlease]", 4)
+    unnumbered = _anime_release("Demon Slayer -Kimetsu no Yaiba- Season 1-4 + Movie [1080p]", 5)
+    releases = [movie, s5, ep45, ep1, unnumbered]
+    seen: list = []
+
+    async def fan_out(q, cfg):
+        seen.append(q)
+        return [r.model_copy(deep=True) for r in releases]
+
+    anime_show = {
+        "id": 41469,
+        "name": "Demon Slayer",
+        "genres": ["Action", "Anime"],
+        "externals": {"imdb": "tt2341771"},
+    }
+    with (
+        patch("arr.pipeline._fan_out", new=fan_out),
+        patch(
+            "arr.metadata.tvmaze.TvmazeClient.search_tv", return_value=anime_show
+        ),
+        patch(
+            "arr.metadata.tvmaze.TvmazeClient.full_series",
+            return_value=_demon_slayer_series(),
+        ),
+    ):
+        resp = client.get("/api/releases/tv?title=Demon+Slayer&season=1&episode=1")
+    assert resp.status_code == 200
+    rows = {row["infohash"]: row for row in resp.json()}
+    # Season 1 of a locally-numbered show is still matched by global number.
+    assert seen[0].anime is True
+    assert seen[0].anime_number_match == [1]
+    for gone in (movie, s5, ep45):
+        assert gone.infohash not in rows, f"{gone.title!r} must not be offered"
+    assert ep1.infohash in rows
+    assert rows[ep1.infohash]["season_label"] == "EP001"
+    assert unnumbered.infohash in rows
+
+
+def test_api_releases_tv_anime_season_query_scopes_bare_numbers(
+    client: TestClient,
+) -> None:
+    """The same guarantees at season level: numbers outside 1..26 are out."""
+    ep45 = _anime_release("Demon Slayer -Kimetsu no Yaiba- 045 [1080p]", 3)
+    ep20 = _anime_release("Demon Slayer -Kimetsu no Yaiba- 020 (1080p) [SubsPlease]", 4)
+
+    async def fan_out(q, cfg):
+        return [ep45.model_copy(deep=True), ep20.model_copy(deep=True)]
+
+    anime_show = {"id": 41469, "name": "Demon Slayer", "genres": ["Anime"]}
+    with (
+        patch("arr.pipeline._fan_out", new=fan_out),
+        patch(
+            "arr.metadata.tvmaze.TvmazeClient.search_tv", return_value=anime_show
+        ),
+        patch(
+            "arr.metadata.tvmaze.TvmazeClient.full_series",
+            return_value=_demon_slayer_series(),
+        ),
+    ):
+        resp = client.get("/api/releases/tv?title=Demon+Slayer&season=1")
+    assert resp.status_code == 200
+    rows = {row["infohash"]: row for row in resp.json()}
+    assert ep20.infohash in rows
+    assert rows[ep20.infohash]["season_label"] == "EP020"
+    assert ep45.infohash not in rows
+
+
+def test_api_releases_movie_still_offers_anime_movie_rows(client: TestClient) -> None:
+    """The movie drawer must keep working for anime films (NYAA category 1)."""
+    movie = _anime_release(
+        "Demon Slayer -Kimetsu no Yaiba- The Movie - Infinity Castle (2025) 1080p",
+        1,
+        media_type=MediaType.MOVIE,
+    )
+
+    async def fan_out(q, cfg):
+        return [movie.model_copy(deep=True)]
+
+    # IMDb resolves the bare title "Demon Slayer" to the 2019 TV series, and
+    # the pre-existing year gate would then reject a 2025 film for reasons
+    # unrelated to anime scoping — so the metadata lookup is stubbed out.
+    with (
+        patch("arr.pipeline._fan_out", new=fan_out),
+        patch("arr.metadata.imdb.ImdbClient.search_movie", return_value=None),
+    ):
+        resp = client.get("/api/releases/movie?title=Demon+Slayer")
+    assert resp.status_code == 200
+    rows = resp.json()
+    assert len(rows) == 1
+    assert rows[0]["infohash"] == movie.infohash
+    assert rows[0]["season_label"] is None
+
+
+def test_api_search_movies_excludes_tv_typed_entries(client: TestClient) -> None:
+    """5.1: IMDb "TV Series" entries must not surface in the Movies section."""
+    results = [
+        {"id": "tt1", "title": "Dune Part Two", "year": 2024, "type": "Feature"},
+        {"id": "tt2", "title": "Naruto", "year": 2002, "type": "TV Series"},
+        {"id": "tt3", "title": "Naruto the Movie", "year": 2000, "type": "Feature"},
+    ]
+    with patch("arr.metadata.imdb.ImdbClient.search_movies", return_value=results):
+        resp = client.get("/api/search/movies?q=naruto")
+    assert resp.status_code == 200
+    titles = [row["title"] for row in resp.json()]
+    assert "Naruto" not in titles
+    assert "Dune Part Two" in titles
+    assert "Naruto the Movie" in titles
 
 
 def test_queue_delete_removes_torrent_files_and_record(

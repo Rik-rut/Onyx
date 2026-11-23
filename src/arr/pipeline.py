@@ -172,6 +172,8 @@ async def search_candidates(
     imdb_id: str | None = None,
     tmdb_id: int | None = None,
     title: str | None = None,
+    season_pack: bool = False,
+    exclude_packs: bool = False,
 ) -> tuple[list[Release], list[Scored], Query]:
     q = Query(
         media_type=media_type,
@@ -182,6 +184,8 @@ async def search_candidates(
         imdb_id=imdb_id,
         tmdb_id=tmdb_id,
         title=title or query,
+        season_pack=season_pack,
+        exclude_packs=exclude_packs,
     )
     # Metadata resolve (best effort) only if not already supplied
     try:
@@ -202,12 +206,46 @@ async def search_candidates(
                     q.title = s.get("name")
                     ext = s.get("externals") or {}
                     q.imdb_id = ext.get("imdb")
+                    q.anime = any(
+                        str(g).strip().lower() == "anime"
+                        for g in (s.get("genres") or [])
+                    )
     except (TvmazeError, ImdbError) as e:
         if media_type == MediaType.MOVIE:
             degrade_movie(query)
         else:
             degrade_tv(query)
         print(f"warning: metadata lookup failed: {e}", file=sys.stderr)
+
+    # Anime episode scoping: releases are matched by bare episode number
+    # only when the numbering is trustworthy — globally continuous across
+    # the series, or the requested season is season 1 (whose local numbers
+    # always equal the global ones). Locally-numbered (per-year arc) shows
+    # keep the legacy title-based behavior.
+    if q.anime and q.season is not None and q.tmdb_id:
+        try:
+            tvm = TvmazeClient(cfg)
+            series = tvm.full_series(q.tmdb_id)
+            all_nums = [
+                ep.episode_number for s in series.seasons for ep in s.episodes
+            ]
+            global_numbering = bool(all_nums) and sorted(all_nums) == list(
+                range(1, len(all_nums) + 1)
+            )
+            season_eps = [
+                ep.episode_number
+                for s in series.seasons
+                if s.season_number == q.season
+                for ep in s.episodes
+            ]
+            if season_eps and (global_numbering or q.season == 1):
+                q.anime_number_match = (
+                    [q.episode]
+                    if q.episode is not None
+                    else sorted(set(season_eps))
+                )
+        except Exception:
+            pass  # numbering unknown -> legacy title-based behavior
 
     q.text = q.title or query
 

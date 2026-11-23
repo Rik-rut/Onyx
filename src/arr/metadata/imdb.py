@@ -206,18 +206,36 @@ class ImdbClient:
         title = str(entry.get("l") or "")
         if not title:
             return None
-        genres = [g for g in _genres_for_imdb_id(imdb_id)]
-        similar = self._similar_by_genre(genres[0], exclude=imdb_id) if genres else []
+        # IMDb title pages are the only source of synopsis/genres/runtime here,
+        # so on this network (WAF-blocked) the suggestion API alone would leave
+        # the movie page with an empty metadata row. Wikipedia/Wikidata fill
+        # those fields keylessly; the payload still reports degraded: true because
+        # IMDb data genuinely never arrived, and the rating stays as-is because
+        # no keyless source carries the IMDb rating.
+        overview = ""
+        runtime = None
+        wiki_genres: list[str] = []
+        try:
+            from arr.metadata.wikipedia import enrich_movie
+
+            enriched = enrich_movie(self.cfg, title, entry.get("y")) or {}
+            overview = str(enriched.get("overview") or "").strip()
+            runtime = enriched.get("runtime")
+            wiki_genres = list(enriched.get("genres") or [])
+        except Exception as e:
+            warn(f"Wikipedia enrichment failed for {imdb_id}: {e}")
+        genres = [g for g in _genres_for_imdb_id(imdb_id)] or wiki_genres
+        similar = self._similar_by_genre(genres, exclude=imdb_id) if genres else []
         return {
             "id": imdb_id,
             "imdb_id": imdb_id,
             "title": title,
             "year": entry.get("y"),
-            "overview": "",
+            "overview": overview,
             "rating": _curated_rating(imdb_id),
             "votes": None,
             "genres": genres,
-            "runtime": None,
+            "runtime": runtime,
             "poster": str((entry.get("i") or {}).get("imageUrl") or "")
             if isinstance(entry.get("i"), dict)
             else "",
@@ -267,17 +285,31 @@ class ImdbClient:
         """IMDb Top 250 movies (curated fallback)."""
         return self._chart("/chart/top/", "movie", limit, _CURATED_TOP_RATED)
 
-    def movies_by_genre(self, genre: str, limit: int = 20) -> list[dict]:
-        """Browse movies by genre via IMDb advanced title search."""
-        slug = str(genre or "").strip().lower().replace(" ", "-")
-        if not slug:
+    def movies_by_genre(
+        self, genre: str | list[str], limit: int = 20, sort: str = "moviemeter"
+    ) -> list[dict]:
+        """Browse movies by genre via IMDb advanced title search.
+
+        `genre` may hold several genres (comma-separated string or list); IMDb
+        matches titles carrying any of them. `sort="rating"` orders results by
+        IMDb user rating instead of the Moviemeter popularity index.
+        """
+        if isinstance(genre, (list, tuple)):
+            parts = [str(g) for g in genre]
+        else:
+            parts = str(genre or "").split(",")
+        parts = [p.strip().lower().replace(" ", "-") for p in parts]
+        parts = [p for p in parts if p]
+        if not parts:
             return []
+        slug = ",".join(parts)
+        sort_mode = "user_rating,desc" if sort == "rating" else "moviemeter,asc"
         path = (
             f"/search/title/?genres={urllib.parse.quote(slug)}"
-            "&title_type=feature&sort=moviemeter,asc"
+            f"&title_type=feature&sort={sort_mode}"
         )
         try:
-            html = self._cached_get(f"genre:{slug}", f"{self.base}{path}")
+            html = self._cached_get(f"genre:{slug}:{sort}", f"{self.base}{path}")
         except ImdbError:
             return self._curated_for_genre(slug, limit)
         items = self._parse_title_list(html, "movie")
@@ -286,6 +318,7 @@ class ImdbClient:
         return items[:limit]
 
     def _curated_for_genre(self, slug: str, limit: int) -> list[dict]:
+        wanted = {p.strip().lower() for p in slug.split(",") if p.strip()}
         pool: list[dict] = []
         seen: set[str] = set()
         for item in _CURATED_TRENDING_MOVIES + _CURATED_TOP_RATED:
@@ -293,7 +326,7 @@ class ImdbClient:
             if imdb_id in seen:
                 continue
             seen.add(imdb_id)
-            if slug in [str(g).lower() for g in item.get("genres", [])]:
+            if wanted & {str(g).lower() for g in item.get("genres", [])}:
                 pool.append(dict(item))
         if not pool:
             pool = [dict(i) for i in _CURATED_TRENDING_MOVIES]
@@ -403,17 +436,20 @@ class ImdbClient:
             if og:
                 out["poster"] = og.attributes.get("content", "") or ""
         if not out["similar"] and out["genres"]:
-            out["similar"] = self._similar_by_genre(out["genres"][0], exclude=imdb_id)
+            out["similar"] = self._similar_by_genre(out["genres"], exclude=imdb_id)
         return out
 
-    def _similar_by_genre(self, genre: str, exclude: str = "", limit: int = 6) -> list[dict]:
-        """Genre-matched recommendations used when IMDb has no More Like This block."""
+    def _similar_by_genre(
+        self, genre: str | list[str], exclude: str = "", limit: int = 6
+    ) -> list[dict]:
+        """Genre-matched recommendations used when IMDb has no More Like This block.
+
+        The seed's full genre list is unioned into the IMDb query so a result
+        can match any of the seed's genres, ordered by user rating.
+        """
         try:
-            return [
-                item
-                for item in self.movies_by_genre(genre, limit=limit + 1)
-                if item["imdb_id"] != exclude
-            ][:limit]
+            items = self.movies_by_genre(genre, limit=limit + 1, sort="rating")
+            return [item for item in items if item["imdb_id"] != exclude][:limit]
         except Exception:
             return []
 
