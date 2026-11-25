@@ -35,6 +35,14 @@ class TpbAdapter:
         query = (q.text or q.title or "").strip()
         if not query:
             return []
+        # Season/episode scoping (design D1): Sxx/Eyy tokens narrow the
+        # indexer's own results. Anime releases number episodes across the
+        # whole series, so the tokens are omitted there.
+        if q.media_type == MediaType.TV and q.season is not None and not q.anime:
+            token = f"S{q.season:02d}"
+            if q.episode is not None:
+                token += f"E{q.episode:02d}"
+            query = f"{query} {token}"
 
         # Text-only search: the live 2026 endpoint cannot combine a
         # `category:` token with search text (verified 2026-11-23), so the

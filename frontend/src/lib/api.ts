@@ -148,6 +148,16 @@ export interface ReleaseItem {
   source?: string | null;
   score: number;
   is_pack: boolean;
+  /** Original indexer torrent name, kept for the drawer's coverage display. */
+  raw_title?: string | null;
+  /** Parsed season number, when the release names one. */
+  season?: number | null;
+  /** Parsed episode number, when the release names one. */
+  episode?: number | null;
+  /** Seasons covered by a pack (list-typed season from the release name). */
+  seasons?: number[] | null;
+  /** Pre-computed coverage label: "S02", "S02E05", or a range like "S01-S05". */
+  season_label?: string | null;
   reasons?: string[];
 }
 

@@ -11,6 +11,23 @@
   const scope = $derived((drawerProps.scope as 'movie' | 'tv') ?? 'movie');
   const title = $derived((drawerProps.title as string) ?? 'Releases');
 
+  // Scope-aware drawer title: for TV, the drawer target carries the requested
+  // season/episode, so "Wayward Pines" reads "Wayward Pines S02E05".
+  const drawerTarget = $derived((drawer()?.target ?? {}) as Record<string, unknown>);
+  const scopeSuffix = $derived(
+    scope === 'tv'
+      ? [
+          typeof drawerTarget.season === 'number'
+            ? `S${String(drawerTarget.season).padStart(2, '0')}`
+            : '',
+          typeof drawerTarget.episode === 'number'
+            ? `E${String(drawerTarget.episode).padStart(2, '0')}`
+            : '',
+        ].filter(Boolean).join('')
+      : '',
+  );
+  const displayTitle = $derived(scopeSuffix ? `${title} ${scopeSuffix}` : title);
+
   const CHIPS: Array<{ label: string; value: string }> = [
     { label: 'All', value: 'All' },
     { label: '4K / 2160p', value: '4K / 2160p' },
@@ -103,7 +120,7 @@
   data-testid="release-drawer"
   role="dialog"
   aria-modal="true"
-  aria-label={title}
+  aria-label={displayTitle}
 >
   <!-- Drawer header -->
   <div class="px-5 py-4 border-b border-onyx-border/80 flex items-start justify-between gap-4 bg-onyx-obsidian/50">
@@ -112,7 +129,7 @@
         {scope === 'movie' ? 'Movie releases' : 'TV releases'}
       </p>
       <h2 class="mt-0.5 text-base sm:text-lg font-bold text-white truncate" data-testid="drawer-title" data-scope={scope}>
-        {title}
+        {displayTitle}
       </h2>
     </div>
     <button
@@ -222,12 +239,30 @@
                     Season Pack
                   </span>
                 {/if}
+                {#if row.season_label}
+                  <span
+                    class="rounded-md bg-emerald-500/15 border border-emerald-400/30 px-2 py-0.5 text-[10px] font-bold font-mono text-emerald-300"
+                    data-testid="release-coverage"
+                    data-season-label={row.season_label}
+                  >
+                    {row.season_label}
+                  </span>
+                {/if}
               </div>
 
               <h3 class="text-xs sm:text-sm font-medium text-slate-100 break-words leading-snug" title={row.title}>
                 {row.title}
               </h3>
 
+              {#if row.raw_title && row.raw_title !== row.title}
+                <p
+                  class="font-mono text-[10px] sm:text-[11px] leading-snug break-all text-slate-500"
+                  data-testid="release-raw-title"
+                  title={row.raw_title}
+                >
+                  {row.raw_title}
+                </p>
+              {/if}
               <div class="flex flex-wrap items-center gap-3 text-xs font-mono text-slate-400">
                 <span>{formatBytes(row.size_bytes)}</span>
                 <span class="text-emerald-400 font-semibold">↓ {row.seeds} seeds</span>

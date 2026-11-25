@@ -234,3 +234,48 @@ test('a query nothing matches renders the No results panel', async () => {
   );
   globalThis.fetch = realFetch;
 });
+
+
+test('a TV-only title stays out of Movies and in TV Shows', async () => {
+  // User story: "naruto" is a TV series on IMDb. The backend now drops
+  // TV-typed entries from /api/search/movies, so only the TV section keeps it.
+  const calls: string[] = [];
+  const narutoTv = [
+    { title: 'Naruto', year: 2002, tmdb_id: 495, imdb_id: 'tt0409591', poster: '', rating: 8.7 },
+  ];
+
+  globalThis.fetch = (path: string) => {
+    const parts = path.split('?');
+    const bare = parts[0];
+    const queryPart = parts.length > 1 ? parts[1] : '';
+    calls.push(path);
+    const respond = (body: unknown) => ({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      text: async () => JSON.stringify(body),
+    });
+    if (bare === '/api/search/movies') return respond(queryPart.includes('naruto') ? [] : movieResults);
+    if (bare === '/api/search/tv') return respond(queryPart.includes('naruto') ? narutoTv : []);
+    if (bare === '/api/library') return respond(libraryPayload);
+    throw new Error(`unmocked ${bare}`);
+  };
+
+  setLocation('/search', 'q=naruto');
+  const rendered = render(SearchPage);
+  await lastAttempt();
+  await flush();
+
+  expect(searchCalls(calls)).toEqual(['/api/search/movies?q=naruto', '/api/search/tv?q=naruto']);
+  expect(movies()).toEqual([]);
+  expect(tv().map((row) => row.title)).toEqual(['Naruto']);
+
+  // The Movies section disappears entirely; the TV section keeps the series.
+  expect(rendered.container.querySelector('[data-testid="rows-movies"]')).toBeNull();
+  const tvSection = rendered.container.querySelector('[data-testid="rows-tv"]');
+  expect(tvSection).toBeTruthy();
+  const tvCards = rendered.container.querySelectorAll('[data-testid="poster-card"][data-kind="tv"]');
+  expect(tvCards.length).toBe(1);
+  expect((tvSection?.textContent ?? '')).toContain('Naruto');
+  globalThis.fetch = realFetch;
+});

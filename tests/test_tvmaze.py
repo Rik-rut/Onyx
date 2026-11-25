@@ -353,3 +353,70 @@ def test_tv_details_includes_summary_and_genres(tmp_path):
     assert d["rating"] == 8.4
     assert d["network"] == "Crunchyroll"
 
+
+
+def test_similar_shows_ranks_multi_genre_overlap_first(tmp_path):
+    """4.1: a show sharing several of the seed's genres must outrank a show
+    sharing only a single generic genre, even if the latter is better rated."""
+    shows = [
+        {
+            "id": 100,
+            "name": "Crime Thriller Show",
+            "status": "Ended",
+            "premiered": "2000-01-01",
+            "genres": ["Crime", "Drama", "Thriller"],
+            "weight": 10,
+            "rating": {"average": 9.0},
+            "image": None,
+            "externals": {"imdb": "tt100"},
+            "summary": "",
+        },
+        {
+            "id": 101,
+            "name": "Double Threat",
+            "status": "Ended",
+            "premiered": "2001-01-01",
+            "genres": ["Crime", "Thriller"],
+            "weight": 9,
+            "rating": {"average": 8.8},
+            "image": None,
+            "externals": {"imdb": "tt101"},
+            "summary": "",
+        },
+        {
+            "id": 102,
+            "name": "Generic Drama",
+            "status": "Ended",
+            "premiered": "2002-01-01",
+            "genres": ["Drama"],
+            "weight": 8,
+            "rating": {"average": 9.5},
+            "image": None,
+            "externals": {"imdb": "tt102"},
+            "summary": "",
+        },
+        {
+            "id": 103,
+            "name": "Crime Only",
+            "status": "Ended",
+            "premiered": "2003-01-01",
+            "genres": ["Crime"],
+            "weight": 7,
+            "rating": {"average": 8.6},
+            "image": None,
+            "externals": {"imdb": "tt103"},
+            "summary": "",
+        },
+    ]
+    with respx.mock:
+        respx.get(f"{BASE}/shows").mock(return_value=httpx.Response(200, json=shows))
+        respx.get(f"{BASE}/shows/100").mock(
+            return_value=httpx.Response(200, json=shows[0])
+        )
+        c = TvmazeClient(cfg(), cache_dir=tmp_path)
+        items = c.similar_shows(100, limit=3)
+
+    ids = [i["id"] for i in items]
+    # 101 shares two genres (+primary bonus) > 103 shares the primary genre
+    # > 102 shares only the generic "Drama", despite the higher rating.
+    assert ids == [101, 103, 102]

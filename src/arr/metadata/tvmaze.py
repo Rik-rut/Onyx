@@ -371,20 +371,31 @@ class TvmazeClient:
         return self._catalog_item(data)
 
     def similar_shows(self, show_id: int | str, limit: int = 10) -> list[dict]:
-        """High-rated shows sharing at least one genre with `show_id`."""
+        """Shows sharing the most genres with `show_id`, best-rated first.
+
+        Score: 2 points per shared genre, plus 1 when the seed's primary
+        (first-listed) genre is among them, so a show sharing several of the
+        seed's genres outranks one sharing only a generic genre.
+        """
         try:
             seed = self.tv_show_summary(int(show_id))
         except (TvmazeError, TypeError, ValueError):
             return []
-        seed_genres = {g.lower() for g in seed.get("genres") or []}
+        seed_genres_raw = [g for g in seed.get("genres") or []]
+        seed_genres = {g.lower() for g in seed_genres_raw}
         if not seed_genres:
             return []
+        primary = seed_genres_raw[0].lower()
         catalog = [self._catalog_item(s) for s in self.shows_catalog()]
-        matches = [
-            s
-            for s in catalog
-            if s["id"] != seed["id"]
-            and seed_genres & {g.lower() for g in s["genres"]}
-        ]
-        return self._ranked(matches)[:limit]
+        matches: list[tuple[float, float, dict]] = []
+        for s in catalog:
+            if s["id"] == seed["id"]:
+                continue
+            shared = seed_genres & {g.lower() for g in s["genres"]}
+            if not shared:
+                continue
+            score = 2 * len(shared) + (1 if primary in shared else 0)
+            matches.append((score, float(s.get("rating") or 0.0), s))
+        matches.sort(key=lambda t: (t[0], t[1]), reverse=True)
+        return [s for _, _, s in matches[:limit]]
 

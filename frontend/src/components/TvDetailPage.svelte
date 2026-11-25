@@ -443,7 +443,7 @@
     {/if}
 
     {#if drawerState?.open}
-      <ReleaseDrawer items={drawerRows} scope={'tv'} title={`${details?.title ?? 'Releases'} releases`} />
+      <ReleaseDrawer items={drawerRows} scope={'tv'} title={details?.title ?? 'Releases'} />
     {/if}
 
     {#if details.similar.length > 0}

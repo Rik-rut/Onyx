@@ -288,6 +288,104 @@ test('season packs with zero releases toast instead of opening an empty drawer',
   globalThis.fetch = realFetch;
 });
 
+
+test('drawer rows show coverage badge, raw name, and scope-aware title', async () => {
+  clearToasts();
+  closeDrawer();
+  const paths: string[] = [];
+  const bodies: Record<string, string[]> = {};
+
+  const episodeReleases = [
+    {
+      indexer: 'EZTV',
+      title: 'Wayward Pines S01E01',
+      raw_title: 'Wayward.Pines.S01E01.1080p.WEB-DL.x264-GRP',
+      infohash: 'ccc3',
+      magnet: 'magnet:?xt=urn:btih:ccc3',
+      seeds: 10,
+      peers: 1,
+      size_bytes: 500000000,
+      resolution: '1080p',
+      codec: 'WEB-DL',
+      source: 'WEB',
+      score: 700,
+      is_pack: false,
+      season: 1,
+      episode: 1,
+      seasons: null,
+      season_label: 'S01E01',
+    },
+    {
+      indexer: 'EZTV',
+      title: 'Wayward Pines S01 COMPLETE',
+      raw_title: 'Wayward.Pines.S01.COMPLETE.1080p.BluRay.x264-GRP',
+      infohash: 'ddd4',
+      magnet: 'magnet:?xt=urn:btih:ddd4',
+      seeds: 30,
+      peers: 2,
+      size_bytes: 2000000000,
+      resolution: '1080p',
+      codec: 'BluRay',
+      source: 'BluRay',
+      score: 900,
+      is_pack: true,
+      season: null,
+      episode: null,
+      seasons: [1],
+      season_label: 'S01',
+    },
+  ];
+
+  globalThis.fetch = (path: string, options?: Record<string, unknown>) => {
+    const [bare, query] = [...path.split('?', 2), ''];
+    paths.push(path);
+    if (typeof options?.body === 'string') {
+      bodies[bare] = [...(bodies[bare] ?? []), String(options.body)];
+    }
+    let payload: unknown = null;
+    if (bare === '/api/tv/7/details' || bare === '/api/tv/4001/details') payload = detailsBody;
+    else if (bare === '/api/releases/tv') payload = episodeReleases;
+    else if (bare === '/api/queue/download/release') payload = { status: 'queued' };
+    else throw new Error(`unmocked path ${bare}`);
+    return { ok: true, status: 200, statusText: 'OK', text: async () => JSON.stringify(payload) };
+  };
+
+  setLocation('/tv/7', '');
+  const rendered = render(TvDetailPage);
+  await until(() => rendered.container.querySelector('[data-testid="episode-releases"]') !== null);
+
+  // Open the episode drawer for season 1, episode 1.
+  const epBtn = rendered.container.querySelector('[data-testid="episode-releases"][data-episode="1"]');
+  epBtn?.click();
+  await until(() => rendered.container.querySelector('[data-testid="release-row"]') !== null);
+  await until(() =>
+    (rendered.container.querySelectorAll('[data-testid="release-row"]').length ?? 0) >= 2,
+  );
+  flushSync(() => {});
+
+  // Scope-aware drawer title: requested show + S01E01.
+  const drawerTitle = rendered.container.querySelector('[data-testid="drawer-title"]');
+  expect(drawerTitle?.textContent).toContain('Wayward Pines');
+  expect(drawerTitle?.textContent).toContain('S01E01');
+
+  // Coverage badge text comes straight from the row's season_label. The drawer
+  // sorts rows by score (pack 900 > episode 700), so the pack leads.
+  const badges = Array.from(rendered.container.querySelectorAll('[data-testid="release-coverage"]'));
+  expect(badges.map((badge) => badge.textContent)).toEqual(['S01', 'S01E01']);
+
+  // The raw indexer name renders under the display title.
+  const rawLines = Array.from(rendered.container.querySelectorAll('[data-testid="release-raw-title"]'));
+  expect(rawLines.map((line) => line.textContent)).toEqual([
+    'Wayward.Pines.S01.COMPLETE.1080p.BluRay.x264-GRP',
+    'Wayward.Pines.S01E01.1080p.WEB-DL.x264-GRP',
+  ]);
+
+  // The pre-existing Season Pack badge still renders for pack rows.
+  expect(rendered.container.textContent ?? '').toContain('Season Pack');
+
+  globalThis.fetch = realFetch;
+});
+
 test('related shows render as PosterCards that navigate to /tv/:id', async () => {
   clearToasts();
   closeDrawer();
