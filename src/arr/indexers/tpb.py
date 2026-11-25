@@ -41,15 +41,26 @@ class TpbAdapter:
         # TV constraint is applied to the parsed rows instead (design D2).
         url = build_search_url(self.base_url, query, q.media_type)
 
-        # Use browser to get JS-rendered page
+        # Use browser to get JS-rendered page. A cold browser session can
+        # render the row skeleton before the seed/leech spans load; retry
+        # once so a partially rendered page does not zero every seeder and
+        # empty the whole search.
         context = await self._browser.get_context()
         page = await context.new_page()
+        html = None
         try:
-            resp = await page.goto(url, wait_until="networkidle", timeout=30000)
-            if resp is None:
-                logger.warning("TPB navigation returned None for %s", url)
-                return []
-            html = await page.content()
+            for attempt in (1, 2):
+                resp = await page.goto(url, wait_until="networkidle", timeout=30000)
+                if resp is None:
+                    logger.warning("TPB navigation returned None for %s", url)
+                    return []
+                html = await page.content()
+                if html and "list-entry" in html and "item-seed" not in html:
+                    logger.info(
+                        "TPB page rendered without seed data (attempt %d)", attempt
+                    )
+                    continue
+                break
         except Exception as exc:
             logger.warning("TPB browser error for %s: %s", url, exc)
             return []

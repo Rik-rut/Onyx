@@ -1578,11 +1578,75 @@ def test_search_candidates_matches_bare_numbers_for_first_season(tmp_path, monke
     assert season_q.anime_number_match == list(range(1, 27))
 
 
-def test_search_candidates_keeps_legacy_scoping_for_local_seasons(tmp_path, monkeypatch):
-    """Season 2's "05" is ambiguous with season 1's "05", so no number filter
-    is applied — today's title-based behavior, never an empty drawer."""
+def test_search_candidates_maps_restart_seasons_by_offset(tmp_path, monkeypatch):
+    """A season-restarting series with clean data maps local numbers to
+    their global position: S2E5 is global 31 (26 preceding + 5)."""
     cfg = make_cfg(tmp_path)
     monkeypatch.setattr(pipeline, "TvmazeClient", _anime_tvmaze(DEMON_SLAYER_SEASONS))
+
+    async def no_releases(q, c):
+        return []
+
+    monkeypatch.setattr(pipeline, "_fan_out", no_releases)
+
+    _, _, episode_q = asyncio.run(
+        pipeline.search_candidates(
+            MediaType.TV, "Demon Slayer", cfg, season=2, episode=5
+        )
+    )
+    assert episode_q.anime_number_match == [31]
+
+    _, _, season_q = asyncio.run(
+        pipeline.search_candidates(MediaType.TV, "Demon Slayer", cfg, season=2)
+    )
+    assert season_q.anime_number_match == list(range(27, 45))
+
+
+def test_search_candidates_maps_year_based_seasons_by_offset(tmp_path, monkeypatch):
+    """Year-based shows (Naruto: 2002-2007, each 1..N) get scoped for every
+    season via the offset mapping: (2003, 5) -> global 18."""
+    cfg = make_cfg(tmp_path)
+    year_based = [
+        (2002, list(range(1, 14))),
+        (2003, list(range(1, 52))),
+        (2004, list(range(1, 52))),
+    ]
+    monkeypatch.setattr(pipeline, "TvmazeClient", _anime_tvmaze(year_based))
+
+    async def no_releases(q, c):
+        return []
+
+    monkeypatch.setattr(pipeline, "_fan_out", no_releases)
+
+    _, _, first = asyncio.run(
+        pipeline.search_candidates(
+            MediaType.TV, "Naruto", cfg, season=2002, episode=1
+        )
+    )
+    assert first.anime_number_match == [1]
+
+    _, _, mapped = asyncio.run(
+        pipeline.search_candidates(
+            MediaType.TV, "Naruto", cfg, season=2003, episode=5
+        )
+    )
+    assert mapped.anime_number_match == [18]
+
+    _, _, season_only = asyncio.run(
+        pipeline.search_candidates(MediaType.TV, "Naruto", cfg, season=2003)
+    )
+    assert season_only.anime_number_match == list(range(14, 65))
+
+
+def test_search_candidates_keeps_legacy_scoping_for_gapped_numbering(tmp_path, monkeypatch):
+    """A season with a numbering gap is neither a slice nor a clean
+    restart, so no number filter is applied — title-based behavior."""
+    cfg = make_cfg(tmp_path)
+    gapped = [
+        (1, [1, 2, 4]),  # episode 3 missing
+        (2, list(range(1, 11))),
+    ]
+    monkeypatch.setattr(pipeline, "TvmazeClient", _anime_tvmaze(gapped))
 
     async def no_releases(q, c):
         return []

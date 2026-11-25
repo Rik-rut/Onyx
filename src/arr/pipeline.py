@@ -217,33 +217,62 @@ async def search_candidates(
             degrade_tv(query)
         print(f"warning: metadata lookup failed: {e}", file=sys.stderr)
 
-    # Anime episode scoping: releases are matched by bare episode number
-    # only when the numbering is trustworthy — globally continuous across
-    # the series, or the requested season is season 1 (whose local numbers
-    # always equal the global ones). Locally-numbered (per-year arc) shows
-    # keep the legacy title-based behavior.
+    # Anime episode scoping: bare-number releases are matched to their
+    # global position only when the series' numbering is trustworthy —
+    # either the seasons form one continuous run (each season a slice of
+    # 1..TOTAL, so the requested number is already global), or every
+    # season restarts at 1 (so the global position is the offset — the
+    # episode count of all preceding seasons — plus the local number).
+    # Any other shape keeps the legacy title-based behavior.
     if q.anime and q.season is not None and q.tmdb_id:
         try:
             tvm = TvmazeClient(cfg)
             series = tvm.full_series(q.tmdb_id)
+            seasons = sorted(series.seasons, key=lambda s: s.season_number)
             all_nums = [
-                ep.episode_number for s in series.seasons for ep in s.episodes
+                ep.episode_number for s in seasons for ep in s.episodes
             ]
-            global_numbering = bool(all_nums) and sorted(all_nums) == list(
-                range(1, len(all_nums) + 1)
-            )
             season_eps = [
                 ep.episode_number
-                for s in series.seasons
+                for s in seasons
                 if s.season_number == q.season
                 for ep in s.episodes
             ]
-            if season_eps and (global_numbering or q.season == 1):
-                q.anime_number_match = (
-                    [q.episode]
-                    if q.episode is not None
-                    else sorted(set(season_eps))
-                )
+            if all_nums and season_eps:
+                if sorted(all_nums) == list(range(1, len(all_nums) + 1)):
+                    # Continuous run: the numbers are already global.
+                    q.anime_number_match = (
+                        [q.episode]
+                        if q.episode is not None
+                        else sorted(set(season_eps))
+                    )
+                else:
+                    # Season-restarting series: map local numbers to their
+                    # global position via the preceding seasons' counts.
+                    offsets: dict[int, int] = {}
+                    running = 0
+                    restarts = True
+                    for s in seasons:
+                        nums = sorted(
+                            ep.episode_number for ep in s.episodes
+                        )
+                        if not nums or nums != list(
+                            range(1, len(nums) + 1)
+                        ):
+                            restarts = False
+                            break
+                        offsets[s.season_number] = running
+                        running += len(nums)
+                    if restarts:
+                        offset = offsets[q.season]
+                        q.anime_number_match = (
+                            [offset + q.episode]
+                            if q.episode is not None
+                            else [
+                                offset + k
+                                for k in range(1, len(season_eps) + 1)
+                            ]
+                        )
         except Exception:
             pass  # numbering unknown -> legacy title-based behavior
 

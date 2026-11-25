@@ -415,6 +415,53 @@ def test_anime_bare_number_not_scoped_as_a_season():
     assert _ranked(r, q).rejected is None
 
 
+def test_film_name_quirk_documented():
+    """guessit 4.4.0 reads a release-group-prefixed film name as an episode,
+    so the ranker's type check alone cannot catch it (the marker must)."""
+    p = parse_release(
+        "[triple117] Demon Slayer - Kimetsu no Yaiba - The Movie - Infinity "
+        "Castle (2025) v2 [CR WEB-DL 1080p AVC Opus 5.1] [Dual Audio] "
+        "[Multi Subs] [8B17098C].mkv"
+    )
+    assert p["type"] == "episode"
+
+
+def test_anime_release_group_prefixed_film_rejected():
+    """The real NYAA Infinity Castle name is excluded from episode results."""
+    r = mk(
+        "[triple117] Demon Slayer - Kimetsu no Yaiba - The Movie - Infinity "
+        "Castle (2025) v2 [CR WEB-DL 1080p AVC Opus 5.1] [Dual Audio] "
+        "[Multi Subs] [8B17098C].mkv",
+        media_type=MediaType.TV,
+    )
+    s = _ranked(r, _anime_query(episode=1))
+    assert s.rejected is not None and "anime movie release" in s.rejected
+
+
+def test_anime_film_dashed_subtitle_rejected():
+    r = mk("Demon Slayer - The Movie - Mugen Train (2020) 1080p", media_type=MediaType.TV)
+    s = _ranked(r, _anime_query(episode=1))
+    assert s.rejected is not None and "anime movie release" in s.rejected
+
+
+def test_anime_pack_listing_movie_component_kept():
+    """A multi-season pack that lists a movie as a component is not a film."""
+    r = mk(
+        "[Furretar] Demon Slayer (Kimetsu no Yaiba) (Season 1-4 + Movie) "
+        "(Mainland + Cantonese Chinese Dub)",
+        media_type=MediaType.TV,
+    )
+    q = _anime_query(season=1)
+    assert _ranked(r, q).rejected is None
+
+
+def test_film_marker_inert_on_western_query():
+    """The film marker only fires in the anime branch."""
+    q = Query(media_type=MediaType.TV, text="Breaking Bad", season=2, episode=1)
+    r = mk("Breaking.Bad.The.Movie.2024.1080p.WEB.x264", media_type=MediaType.TV)
+    assert _ranked(r, q).rejected is None
+
+
 def test_western_gate_outcomes_unchanged():
     """The new anime branch must not move a single Western TV outcome."""
     wrong = mk("Breaking.Bad.S05E14.1080p.WEB-DL.x264", media_type=MediaType.TV)

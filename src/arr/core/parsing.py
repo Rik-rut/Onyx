@@ -174,6 +174,29 @@ def _names_season(r: Release) -> bool:
     return bool(_SEASON_TOKEN_RE.search(r.raw_title or r.title or ""))
 
 
+# guessit 4.4.0 classifies anime film names that carry a release-group prefix
+# as type=episode ("[triple117] ... The Movie - Infinity Castle (2025) ..." ->
+# episode), so the name itself is checked as well. The patterns must not fire
+# on packs that list a movie as a component (e.g. "(Season 1-4 + Movie)").
+_FILM_MARKER_RE = re.compile(
+    r"\bthe\s+movie\b"           # The Movie - <subtitle>
+    r"|\bmovie\s*-"              # Movie - <subtitle/arc>
+    r"|\bmovie\s*\(\s*\d{4}\)"   # Movie (2020)
+    r"|\bmovie\s+[a-z]+(?=\s)"   # Movie <word> <word> (Movie Road To ...)
+    r"|\bmovie\s*$",             # trailing "Movie"
+    re.I,
+)
+
+
+def _has_film_marker(r: Release) -> bool:
+    """Whether the release name carries a theatrical-film marker.
+
+    Checked on the raw title because the parsed title is truncated for
+    release-group-prefixed names.
+    """
+    return bool(_FILM_MARKER_RE.search(r.raw_title or r.title or ""))
+
+
 def _title_relevant(r: Release, q: Query) -> bool:
     """Reject releases whose title does not plausibly match the query.
 
@@ -234,7 +257,9 @@ def hard_filter(r: Release, q: Query, profile: QualityProfile, cfg: dict) -> str
         # Anime theatrical films never belong in TV release results
         # (NYAA's category split keeps them out at the source; this is the
         # ranker-level guarantee for other indexers and misparsed names).
-        if r.release_type == "movie":
+        # The name is checked in addition to the parsed type because guessit
+        # reads release-group-prefixed film names as episodes.
+        if r.release_type == "movie" or _has_film_marker(r):
             return "anime movie release in TV release search"
         # Only a name that states a season may scope an anime release out:
         # a bare "215" is a global episode number that guessit reads as
