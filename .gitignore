@@ -30,6 +30,7 @@ docs/
 # Markdown files (ignore all except README)
 *.md
 !README.md
+AGENTS.md
 
 # Portable binaries
 bin/
