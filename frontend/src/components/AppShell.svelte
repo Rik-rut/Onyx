@@ -11,12 +11,20 @@
   import ViewSlot from './ViewSlot.svelte';
   import {
     backendDown,
+    closeSocket,
     openSocket,
     retryDelayMs,
     retryNow,
   } from '../lib/stores/queue.svelte';
   import { refreshIfStale } from '../lib/stores/library.svelte';
   import { observeHistory, syncLocation } from '../lib/router.svelte';
+  import {
+    authMustChange,
+    authStatus,
+    fetchStatus,
+  } from '../lib/stores/auth.svelte';
+  import LoginPage from './LoginPage.svelte';
+  import ChangeCredentialsGate from './ChangeCredentialsGate.svelte';
 
   let initialized = false;
   $effect(() => {
@@ -24,16 +32,35 @@
     if (initialized) return;
     initialized = true;
     syncLocation();
-    // Connect live /ws/queue feed in real browsers (skip jsdom's broken ws shim),
-    // and pre-warm local library cache for instant Ctrl+K matching.
-    const isJsdom = typeof navigator !== 'undefined' && /jsdom/i.test(navigator.userAgent);
-    if (!isJsdom && typeof globalThis.WebSocket === 'function') {
-      openSocket();
-    }
+    // Resolve the session before any view loads, and pre-warm the local
+    // library cache for instant Ctrl+K matching.
+    void fetchStatus();
     void refreshIfStale(60_000).catch(() => void 0);
+  });
+
+  // The live /ws/queue feed only opens once the session is valid and the
+  // forced credential change has been made; the cleanup tears the socket
+  // down (and its pending retry) when the state leaves that branch.
+  $effect(() => {
+    const status = authStatus();
+    const mustChange = authMustChange();
+    const isJsdom = typeof navigator !== 'undefined' && /jsdom/i.test(navigator.userAgent);
+    if (status !== 'authenticated' || mustChange) return;
+    if (isJsdom || typeof globalThis.WebSocket !== 'function') return;
+    openSocket();
+    return () => closeSocket();
   });
 </script>
 
+{#if authStatus() === 'loading'}
+  <div class="min-h-screen w-full bg-onyx-obsidian text-onyx-text flex items-center justify-center" data-testid="auth-loading">
+    <p class="text-sm text-onyx-muted">Loading session…</p>
+  </div>
+{:else if authStatus() === 'unauthenticated'}
+  <LoginPage />
+{:else if authMustChange()}
+  <ChangeCredentialsGate />
+{:else}
 <div class="min-h-screen w-full bg-onyx-obsidian text-onyx-text flex">
   <Sidebar />
 
@@ -77,3 +104,4 @@
   <ConfirmDialog />
   <ToastHost />
 </div>
+{/if}

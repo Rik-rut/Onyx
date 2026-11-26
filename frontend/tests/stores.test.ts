@@ -1,5 +1,6 @@
 import { expect, test } from 'vitest';
 import { acceptMessage, backendDown, closeSocket, openSocket, queueCount, refreshFromRest, retryDelayMs, statusGroup, torrents, totalDownloadRate, totalUploadRate, wsConnected } from '../src/lib/stores/queue.svelte';
+import { fetchStatus } from '../src/lib/stores/auth.svelte';
 import { findMovie, invalidate, isCached, libraryCount, localMatches, refresh, seededTitles } from '../src/lib/stores/library.svelte';
 import {
   askConfirmation,
@@ -92,6 +93,22 @@ test('backoff doubles per failure to the ceiling', async () => {
 });
 
 test('socket handshake records url and handlers', async () => {
+  // The socket is an authenticated resource; establish the session first.
+  globalThis.fetch = (path) =>
+    path.startsWith('/api/auth/status')
+      ? {
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          text: async () =>
+            JSON.stringify({
+              authenticated: true,
+              username: 'admin',
+              must_change_credentials: false,
+            }),
+        }
+      : { ok: false, status: 503, statusText: 'no mock', text: async () => '' };
+  await fetchStatus();
   const opened: string[] = [];
   const fired: string[] = [];
   const handlers = new Map<string, (event: { data?: string }) => void>();
@@ -119,6 +136,7 @@ test('socket handshake records url and handlers', async () => {
   closeSocket();
   expect(wsConnected()).toBe(false);
   globalThis.WebSocket = realWebSocket;
+  globalThis.fetch = realFetch;
 });
 
 test('library cache answers locally', async () => {

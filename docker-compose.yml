@@ -1,15 +1,15 @@
-name: arr
+name: onyx
 services:
-  arr:
-    image: arr:latest
+  onyx:
+    image: onyx:latest
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: arr
+    container_name: onyx
     restart: unless-stopped
     ports:
-      - "${WEB_PORT:-3698}:3698"
-      - "${TRANSMISSION_PORT:-9091}:9091"
+      - "3698:3698"
+      - "9091:9091"
       - "51413:51413"
       - "51413:51413/udp"
     environment:
@@ -17,48 +17,9 @@ services:
       - PGID=${PGID:-1000}
       - TZ=${TZ:-UTC}
     volumes:
-      - ${CONFIG_DIR:-./config}:/config
-      - ${MOVIES_DIR:-./downloads/movies}:/downloads/movies
-      - ${TV_SHOWS_DIR:-./downloads/tv-shows}:/downloads/tv-shows
-    x-casaos:
-      envs:
-        - container: PUID
-          description:
-            en_us: User ID for permissions
-        - container: PGID
-          description:
-            en_us: Group ID for permissions
-        - container: TZ
-          description:
-            en_us: System Timezone
-      volumes:
-        - container: /config
-          description:
-            en_us: Configuration files and SQLite database
-        - container: /downloads/movies
-          description:
-            en_us: Destination directory for downloaded Movies
-        - container: /downloads/tv-shows
-          description:
-            en_us: Destination directory for downloaded TV Shows
-      ports:
-        - container: 3698
-          description:
-            en_us: Onyx Web Dashboard port
-        - container: 9091
-          description:
-            en_us: Transmission Web UI / RPC port
-      author: Onyx Team
-      category: Media
-      icon: https://raw.githubusercontent.com/WalkxCode/Dashboard-Icons/main/png/sonarr.png
-      title:
-        en_us: Onyx Media Discovery & Downloader
-      tagline:
-        en_us: Automated Movie & TV Torrent Downloader & Library Manager
-      description:
-        en_us: Onyx autonomously discovers, downloads, and organises movies and TV shows with zero API keys.
-      index: /
-      port_map: "3698"
+      - /DATA/AppData/onyx/config:/config
+      - /DATA/AppData/onyx/downloads/movies:/downloads/movies
+      - /DATA/AppData/onyx/downloads/tv-shows:/downloads/tv-shows
   torrentio-scraper:
     image: ghcr.io/th3r0b/torrentio-scraper:latest
     container_name: torrentio-scraper
@@ -67,10 +28,23 @@ services:
       - "8085:8080"
     environment:
       - PROVIDERS=YTS,EZTV,Nyaa,1337x,ThePirateBay
-    x-casaos:
-      author: Onyx Team
-      category: Media
-      title:
-        en_us: Torrentio Scraper Sidecar
-      description:
-        en_us: Self-hosted torrent scraper for reliable search results
+x-casaos:
+  id: com.onyx.media
+  main: onyx
+  index: /
+  port_map: "3698"
+  scheme: http
+  icon: https://raw.githubusercontent.com/<owner>/<repo>/main/assets/onyx.svg
+  title:
+    en_US: Onyx Media Discovery & Downloader
+  tagline:
+    en_US: Automated Movie & TV Torrent Downloader & Library Manager
+  description:
+    en_US: Onyx autonomously discovers, downloads, and organises movies and TV shows with zero API keys.
+  author: Onyx Team
+  developer: Onyx Team
+  category: Media
+  architectures:
+    - amd64
+    - arm64
+  version: "0.1.0"

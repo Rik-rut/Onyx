@@ -160,6 +160,9 @@ max_upload_speed_kbps = 0
 
 class Config(BaseModel):
     values: dict = Field(default_factory=lambda: dict(DEFAULTS))
+    # Where this Config was loaded from (set by load_config). Never serialized
+    # to TOML; lets the web app resolve sibling files like auth.toml.
+    source_path: Path | None = Field(default=None)
 
     def get(self, key: str, default=None):
         return self.values.get(key, DEFAULTS.get(key, default))
@@ -198,7 +201,7 @@ def load_config(path: Path | str | None = None) -> Config:
         with p.open("rb") as f:
             user = tomllib.load(f)
         values.update(user)
-    return Config(values=values)
+    return Config(values=values, source_path=p)
 
 
 def init_config(path: Path | str | None = None) -> Path:

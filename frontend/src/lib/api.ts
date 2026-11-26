@@ -1,6 +1,8 @@
 // Typed REST client for Onyx's FastAPI surface (src/arr/web/routes/*.py).
 // Relative paths keep the SPA same-origin: production is served by FastAPI
 // itself, development by scripts/dev-proxy.mjs.
+import { navigate } from './router.svelte';
+import { markUnauthenticated } from './stores/auth.svelte';
 interface Fetched {
   ok: boolean;
   status: number;
@@ -77,7 +79,7 @@ function buildQuery(values: Record<string, unknown>): string {
   return parts.length ? `?${parts.join('&')}` : '';
 }
 
-async function request(method: string, path: string, body?: unknown): Promise<unknown> {
+export async function request(method: string, path: string, body?: unknown): Promise<unknown> {
   const options: FetchOptions = { method };
   if (body !== undefined) {
     options.headers = { 'content-type': 'application/json' };
@@ -97,6 +99,11 @@ async function request(method: string, path: string, body?: unknown): Promise<un
     if (parsed && typeof parsed.detail === 'string') detail = parsed.detail;
   } catch (parseFailure) {
     void parseFailure;
+  }
+  // A 401 from the session gate means the session is gone: back to /login.
+  if (response.status === 401 && !path.startsWith('/api/auth/login')) {
+    navigate('/login');
+    markUnauthenticated();
   }
   throw new ApiError(response.status, detail, path);
 }

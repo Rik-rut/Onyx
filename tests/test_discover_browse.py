@@ -96,8 +96,10 @@ def test_cfg(tmp_path: Path) -> Config:
 
 
 @pytest.fixture
-def client(test_cfg: Config) -> TestClient:
-    return TestClient(create_app(test_cfg))
+def client(test_cfg: Config, tmp_path: Path) -> TestClient:
+    client = TestClient(create_app(test_cfg, auth_path=tmp_path / "auth.toml"))
+    client.post("/api/auth/login", json={"username": "admin", "password": "1234"})
+    return client
 
 
 @pytest.fixture(autouse=True)

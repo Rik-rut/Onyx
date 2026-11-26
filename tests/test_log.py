@@ -33,8 +33,9 @@ def test_http_request_logging_middleware(tmp_path: Path) -> None:
     cfg = Config(values=vals)
 
     configure_logging(cfg, level=logging.INFO, stream=stream)
-    app = create_app(cfg)
+    app = create_app(cfg, auth_path=tmp_path / "auth.toml")
     client = TestClient(app)
+    client.post("/api/auth/login", json={"username": "admin", "password": "1234"})
 
     # 1. API request should be logged
     client.get("/api/queue")

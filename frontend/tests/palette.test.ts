@@ -4,7 +4,9 @@ import AppShell from '../src/components/AppShell.svelte';
 import { paletteKey } from '../src/lib/palette';
 import { currentPath, route } from '../src/lib/router.svelte';
 import { refresh } from '../src/lib/stores/library.svelte';
+import { authSettled } from '../src/lib/stores/auth.svelte';
 import { palette, rememberSearch, setPalette } from '../src/lib/stores/ui.svelte';
+import { authenticatedFetch } from './auth';
 
 declare const globalThis: {
   fetch: (path: string) => {
@@ -17,8 +19,13 @@ declare const globalThis: {
 
 const realFetch = globalThis.fetch;
 
+// AppShell fetches /api/auth/status on mount; default to an authenticated
+// session so these palette tests keep rendering the dashboard.
+const defaultFetch = authenticatedFetch(realFetch);
+globalThis.fetch = defaultFetch;
+
 function recordFetch(calls: string[]): void {
-  globalThis.fetch = (path: string) => {
+  globalThis.fetch = authenticatedFetch((path: string) => {
     calls.push(path);
     const body = path.startsWith('/api/library')
       ? {
@@ -31,12 +38,16 @@ function recordFetch(calls: string[]): void {
         }
       : { items: [] };
     return { ok: true, status: 200, statusText: 'OK', text: async () => JSON.stringify(body) };
-  };
+  });
 }
 
 function type(word: string): void {
   for (const char of word) paletteKey({ key: char });
 }
+
+// The shell renders after the auth status fetch settles (fetch -> text ->
+// parse -> state); await the real state signal, not a guessed delay.
+const shellReady = () => authSettled();
 
 test('typing filters locally with zero search API calls', async () => {
   const calls: string[] = [];
@@ -46,6 +57,7 @@ test('typing filters locally with zero search API calls', async () => {
   setPalette(true, 'he');
   expect(palette().query).toBe('he');
   const rendered = render(AppShell);
+  await shellReady();
   expect(rendered.container.querySelector('[data-testid="palette-query"]').textContent).toBe('he');
   expect(calls.filter((path) => path.startsWith('/api/search'))).toEqual([]);
   // Local matches and route shortcuts render without any network round-trip.
@@ -54,7 +66,7 @@ test('typing filters locally with zero search API calls', async () => {
   expect(matches.textContent).toContain('heat');
   // Nav shortcuts only render when they match the typed prefix.
   expect(matches.textContent.includes('Movies')).toBe(false);
-  globalThis.fetch = realFetch;
+  globalThis.fetch = defaultFetch;
 });
 
 test('Ctrl+K opens the palette and Enter jumps to /search', async () => {
@@ -76,6 +88,7 @@ test('Ctrl+K opens the palette and Enter jumps to /search', async () => {
 test('a header click opens the palette', async () => {
   setPalette(false, '');
   const rendered = render(AppShell);
+  await shellReady();
   expect(rendered.container.querySelector('[data-testid="palette-closed"]')).toBeTruthy();
   rendered.container.querySelector('[data-testid="palette-trigger"]').click();
   await null;

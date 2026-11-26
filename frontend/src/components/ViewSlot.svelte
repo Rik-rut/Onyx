@@ -12,11 +12,14 @@
   import MonitoredPage from './MonitoredPage.svelte';
   import QueuePage from './QueuePage.svelte';
   import SettingsPage from './SettingsPage.svelte';
+  import LoginPage from './LoginPage.svelte';
 
   const view = $derived(route()?.view);
 </script>
 
-{#if view === 'search'}
+{#if view === 'login'}
+  <LoginPage />
+{:else if view === 'search'}
   <SearchPage />
 {:else if view === 'movie'}
   <MovieDetailPage />

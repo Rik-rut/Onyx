@@ -22,9 +22,12 @@ def test_cfg(tmp_path: Path) -> Config:
 
 
 @pytest.fixture
-def client(test_cfg: Config) -> TestClient:
-    app = create_app(test_cfg)
-    return TestClient(app)
+def client(test_cfg: Config, tmp_path: Path) -> TestClient:
+    app = create_app(test_cfg, auth_path=tmp_path / "auth.toml")
+    client = TestClient(app)
+    # Every /api/* route is session-gated; log in with the seeded account.
+    client.post("/api/auth/login", json={"username": "admin", "password": "1234"})
+    return client
 
 
 @pytest.fixture(autouse=True)
@@ -1122,22 +1125,23 @@ def test_spa_fallback_missing_build_diagnostic(test_cfg: Config, tmp_path: Path)
     """An unbuilt frontend bundle must yield a build hint, not a crash."""
     unbuilt = tmp_path / "unbuilt-dist"
     with patch("arr.web.app.DIST_DIR", unbuilt):
-        client = TestClient(create_app(test_cfg))
+        client = TestClient(create_app(test_cfg, auth_path=tmp_path / "auth.toml"))
         resp = client.get("/queue")
         assert resp.status_code == 200
         assert "Onyx frontend bundle is missing" in resp.text
         assert "npm run build" in resp.text
         assert "doctype" in resp.text.lower()
+        client.post("/api/auth/login", json={"username": "admin", "password": "1234"})
         api = client.get("/api/config")
         assert api.status_code == 200
         assert api.json()["library_root"] == str(test_cfg.get("library_root"))
 
 
-def test_web_startup_runs_library_maintenance(test_cfg: Config) -> None:
+def test_web_startup_runs_library_maintenance(test_cfg: Config, tmp_path: Path) -> None:
     """IM-05: app startup must normalise the library and index disk media (R2.3/R3.1)."""
     import arr.pipeline as pipeline
 
-    app = create_app(test_cfg)
+    app = create_app(test_cfg, auth_path=tmp_path / "auth.toml")
     calls: list[str] = []
     with (
         patch(

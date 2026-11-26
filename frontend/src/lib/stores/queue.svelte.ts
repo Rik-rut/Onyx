@@ -3,10 +3,12 @@
 // reconnect backoff (1s -> 15s), and a REST fallback poll.
 import { api, queueSocketUrl } from '../../lib/api';
 import type { QueueItem } from '../../lib/api';
+import { authStatus, fetchStatus } from './auth.svelte';
 
 declare const globalThis: {
   WebSocket?: new (url: string) => Socket;
   setTimeout: (callback: () => void, ms: number) => unknown;
+  clearTimeout?: (id: unknown) => void;
   location?: { protocol: string; host: string };
 };
 
@@ -26,6 +28,7 @@ const transfer = $state({
   receivedAt: 0,
   failures: 0,
   retryScheduled: false,
+  retryTimer: 0 as unknown,
 });
 
 export function torrents(): QueueItem[] {
@@ -82,8 +85,9 @@ function scheduleRetry(): void {
   transfer.retryScheduled = true;
   const delay = retryDelayMs();
   transfer.failures += 1;
-  globalThis.setTimeout(() => {
+  transfer.retryTimer = globalThis.setTimeout(() => {
     transfer.retryScheduled = false;
+    transfer.retryTimer = 0;
     openSocket();
   }, delay);
 }
@@ -95,11 +99,21 @@ export function openSocket(): void {
     void refreshFromRest();
     return;
   }
+  // The socket is an authenticated resource; a stale client state (e.g. a
+  // server restart clears sessions) must not open a socket the server will
+  // just reject.
+  if (authStatus() !== 'authenticated') return;
   try {
     const created = new ctor(snapshotUrl());
     created.addEventListener('message', (event) => acceptMessage(event.data ?? ''));
     created.addEventListener('error', () => scheduleRetry());
-    created.addEventListener('close', () => scheduleRetry());
+    created.addEventListener('close', () => {
+      // A refused handshake while the client believes it is logged in means
+      // the server no longer knows the session; re-verify so the shell
+      // bounces to the login page instead of retrying forever.
+      if (authStatus() === 'authenticated') void fetchStatus();
+      scheduleRetry();
+    });
     transfer.socket = created;
     transfer.failures = 0;
   } catch (failure) {
@@ -113,6 +127,10 @@ export function closeSocket(): void {
   if (transfer.socket) transfer.socket.close();
   transfer.socket = null;
   transfer.retryScheduled = false;
+  if (transfer.retryTimer) {
+    globalThis.clearTimeout?.(transfer.retryTimer);
+    transfer.retryTimer = 0;
+  }
   transfer.failures = 0;
 }
 

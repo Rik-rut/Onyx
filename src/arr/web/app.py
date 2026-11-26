@@ -4,11 +4,14 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from arr.config.settings import Config
+from arr.auth import AuthStore
+from arr.config.settings import Config, default_config_path
 from arr.log import get_logger
+from arr.web.routes.auth import has_valid_session
+from arr.web.routes.auth import router as auth_router
 from arr.web.routes.config import router as config_router
 from arr.web.routes.discover import router as discover_router
 from arr.web.routes.library import router as library_router
@@ -63,6 +66,14 @@ FAVICON_SVG = (
 async def lifespan(app: FastAPI):
     cfg = app.state.cfg
     stop_event = asyncio.Event()
+
+    # Seed auth.toml when absent and warn while the default account stands.
+    auth_store = app.state.auth
+    auth_store.load()
+    if auth_store.must_change_credentials:
+        logger.warning(
+            "Default web credentials admin / 1234 are in use - change them after the first login"
+        )
 
     async def _startup_maintenance() -> None:
         """R2.3/R3.1: normalise downloads/ and index the disk library on startup."""
@@ -136,10 +147,30 @@ async def lifespan(app: FastAPI):
         await close_browser_session()
 
 
-def create_app(cfg: Config) -> FastAPI:
+def create_app(cfg: Config, auth_path: Path | str | None = None) -> FastAPI:
     """Create and configure the FastAPI web application instance."""
     app = FastAPI(title="Onyx Web Dashboard", version="0.1.0", lifespan=lifespan)
     app.state.cfg = cfg
+    app.state.auth = AuthStore(
+        auth_path
+        if auth_path is not None
+        else (
+            cfg.source_path.parent / "auth.toml"
+            if cfg.source_path is not None
+            else default_config_path().parent / "auth.toml"
+        )
+    )
+
+    @app.middleware("http")
+    async def auth_gate(request: Request, call_next):
+        """Gate every /api/* route except the login flow itself; the SPA
+        document, static assets, and /favicon.ico stay open so the login
+        page can render. The WebSocket is checked in its own handler."""
+        path = request.url.path
+        if path.startswith("/api/") and path not in ("/api/auth/login", "/api/auth/status"):
+            if not has_valid_session(request.cookies):
+                return JSONResponse({"detail": "authentication required"}, status_code=401)
+        return await call_next(request)
 
     @app.middleware("http")
     async def log_requests(request: Request, call_next):
@@ -154,6 +185,7 @@ def create_app(cfg: Config) -> FastAPI:
             logger.info(f"{request.method} {path} -> {response.status_code} ({duration_ms:.1f}ms)")
         return response
 
+    app.include_router(auth_router)
     app.include_router(search_router)
     app.include_router(discover_router)
     app.include_router(queue_router)

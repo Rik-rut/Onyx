@@ -58,6 +58,31 @@ Key settings: `download_root`, `library_root`,
 `subtitles_enabled`, `subtitles_forced_only`, `monitor_poll_interval_minutes`,
 `monitor_lookahead_days`, `unmonitor_ended_series`.
 
+## Web login
+
+The web UI (port 3698) is protected by a local account. On first start the
+default credentials are `admin` / `1234`; the app logs a warning while the
+default account is in use and forces a credential change on the first login
+(`ChangeCredentialsGate` blocks every view until the new username/password is
+saved). Credentials are stored as a salted PBKDF2-HMAC-SHA256 hash in
+`auth.toml`, next to `config.toml` (or next to the file passed via
+`--config`); the plaintext password is never persisted.
+
+Sessions use an httpOnly cookie (`onyx_session`, 7 days). All `/api/*` routes
+and the `/ws/queue` socket return 401 until logged in; the SPA itself
+(`/`, `/login`, static assets) stays open so the login page can render.
+`POST /api/auth/logout` ends the session.
+
+### Importing into ZimaOS
+
+`docker-compose.yml` carries a top-level `x-casaos` block, so ZimaOS imports
+it directly: Settings → App Store → *Import from compose file* → select
+`docker-compose.yml`. The app appears as **Onyx Media Discovery &
+Downloader** (category *Media*) with the Onyx icon, exposing the web
+dashboard on port 3698 plus the Transmission ports (9091, 51413 tcp/udp).
+The `id` and `icon` fields are placeholders until the repository is
+published — point them at the public repo, then re-import.
+
 ## Command reference
 
 ```

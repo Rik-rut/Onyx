@@ -10,7 +10,8 @@ export type RouteView =
   | 'library'
   | 'monitored'
   | 'queue'
-  | 'settings';
+  | 'settings'
+  | 'login';
 
 export interface Match {
   view: RouteView;
@@ -29,6 +30,7 @@ const STATIC_VIEWS: ReadonlyArray<[string, RouteView]> = [
   ['/monitored', 'monitored'],
   ['/queue', 'queue'],
   ['/settings', 'settings'],
+  ['/login', 'login'],
 ];
 
 function parseQuery(query: string): Record<string, string> {
@@ -75,6 +77,7 @@ export function pathFor(view: RouteView, params: Record<string, string> = {}): s
     monitored: '/monitored',
     queue: '/queue',
     settings: '/settings',
+    login: '/login',
   };
   const query = QUERY_KEYS
     .filter((key) => params[key] !== undefined && params[key] !== '')
@@ -97,6 +100,29 @@ declare const globalThis: { window?: BrowserWindow };
 
 const observedLocation = $state({ path: '/', search: '' });
 
+// Test seam: every location change bumps a version, and routeSettled()
+// resolves on the next bump — tests await the real signal, not a delay.
+let routeVersion = 0;
+const routeWaits: Array<{ after: number; resolve: () => void }> = [];
+
+function bumpRoute(): void {
+  routeVersion += 1;
+  const pending: typeof routeWaits = [];
+  for (const wait of routeWaits) {
+    if (wait.after < routeVersion) wait.resolve();
+    else pending.push(wait);
+  }
+  routeWaits.length = 0;
+  routeWaits.push(...pending);
+}
+
+/** Resolves once the location has changed at least once since the call. */
+export function routeSettled(): Promise<void> {
+  const { promise, resolve } = Promise.withResolvers<void>();
+  routeWaits.push({ after: routeVersion, resolve });
+  return promise;
+}
+
 function normalizePath(path: string): string {
   if (path === '') return '/';
   return path.startsWith('/') ? path : `/${path}`;
@@ -113,6 +139,7 @@ export function currentPath(): string {
 export function setLocation(path: string, search: string): void {
   observedLocation.path = normalizePath(path);
   observedLocation.search = search;
+  bumpRoute();
 }
 
 export function syncLocation(): void {
