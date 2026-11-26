@@ -6,7 +6,14 @@ import respx
 
 from arr.config.settings import DEFAULTS, Config
 from arr.core.models import MediaType, Query
-from arr.indexers import EztvAdapter, HttpClient, NyaaAdapter, SchemaMismatchError, YtsAdapter
+from arr.indexers import (
+    AnimetoshoAdapter,
+    EztvAdapter,
+    HttpClient,
+    NyaaAdapter,
+    SchemaMismatchError,
+    YtsAdapter,
+)
 
 
 def cfg():
@@ -870,3 +877,199 @@ def test_build_adapters_excludes_torrentio_when_disabled():
     adapter_names = [a.name for a in adapters]
     assert "torrentio" not in adapter_names
     assert not any(isinstance(a, TorrentioAdapter) for a in adapters)
+
+
+# -- Anime Tosho parser (3.1) ------------------------------------------------
+
+
+def test_animetosho_parse_rows_fixture():
+    """3.1: Captured search page parses into fully populated row dicts."""
+    from arr.indexers.animetosho_parser import parse_rows
+
+    html = open("tests/fixtures/animetosho_search.html", encoding="utf-8").read()
+    rows = parse_rows(html)
+    # The DDL-only row (no magnet link) is skipped.
+    assert len(rows) == 2
+    row = rows[0]
+    assert row["title"] == (
+        "[AnoZu] One Piece S23E06 1080p CR WEB-DL Dual-Audio DDP 2.0 H.264"
+    )
+    assert row["magnet"].startswith(
+        "magnet:?xt=urn:btih:611e5b6bcfa317ea580a40da2e7befda5caf3a9f"
+    )
+    assert "&" in row["magnet"]  # HTML entities unescaped
+    assert row["size_bytes"] == 1527565407
+    assert row["seeders"] == 216
+    assert row["leechers"] == 91
+    # Anime Tosho also serves 32-char base32 infohashes (upper-cased in the
+    # magnet URI); they must parse as a clean lowercase hash.
+    base32_row = rows[1]
+    assert base32_row["title"].startswith("One Piece - 1180")
+    assert base32_row["magnet"].startswith(
+        "magnet:?xt=urn:btih:HSZMPOIZCBQVT7LVBKXKL7NJP4JRKYC4"
+    )
+    assert base32_row["size_bytes"] == 174931954
+
+
+def test_animetosho_parse_rows_empty_fixture():
+    """3.1: No-results search page parses to an empty list (not an error)."""
+    from arr.indexers.animetosho_parser import parse_rows
+
+    html = open("tests/fixtures/animetosho_search_empty.html", encoding="utf-8").read()
+    assert parse_rows(html) == []
+
+
+def test_animetosho_malformed_page_raises():
+    """3.1: Page with no recognizable search layout raises SchemaMismatchError."""
+    from arr.indexers.animetosho_parser import parse_rows
+
+    with pytest.raises(SchemaMismatchError):
+        parse_rows("<html><body><h1>weird page</h1></body></html>")
+
+
+# -- Anime Tosho adapter (3.2) -----------------------------------------------
+
+
+def test_animetosho_search_returns_releases(tmp_path):
+    """3.2: Search maps fixture rows to Releases with magnet infohash."""
+    html = open("tests/fixtures/animetosho_search.html", encoding="utf-8").read()
+    isolated = HttpClient(cfg(), cache_dir=tmp_path)
+    with respx.mock:
+        respx.get("https://animetosho.net/search").mock(
+            return_value=httpx.Response(200, text=html)
+        )
+        out = asyncio.run(
+            AnimetoshoAdapter("https://animetosho.net", isolated).search(
+                Query(media_type=MediaType.TV, text="One Piece", anime=True)
+            )
+        )
+    assert len(out) == 2
+    release = out[0]
+    assert release.indexer == "animetosho"
+    assert release.infohash == "611e5b6bcfa317ea580a40da2e7befda5caf3a9f"
+    assert release.magnet.startswith("magnet:?xt=urn:btih:")
+    assert release.seeds == 216
+    assert release.peers == 91
+    assert release.size_bytes == 1527565407
+    assert release.media_type == MediaType.TV
+    # The base32 row's infohash is normalized to the 40-hex form
+    # Transmission uses (its hex hashString), not a slice of the base32
+    # hash that swallows the magnet's next parameter.
+    assert out[1].infohash == "3cb2c7b919106159fd750aaea5fda97f1315605c"
+
+
+def test_animetosho_search_appends_season_episode_tokens(tmp_path):
+    """3.2: Non-anime TV queries carry Sxx/Eyy tokens; anime queries send none."""
+    html = open("tests/fixtures/animetosho_search.html", encoding="utf-8").read()
+    isolated = HttpClient(cfg(), cache_dir=tmp_path)
+    with respx.mock:
+        route = respx.get("https://animetosho.net/search").mock(
+            return_value=httpx.Response(200, text=html)
+        )
+        adapter = AnimetoshoAdapter("https://animetosho.net", isolated)
+        asyncio.run(
+            adapter.search(
+                Query(media_type=MediaType.TV, text="Show", season=2, episode=5)
+            )
+        )
+        assert route.calls.last.request.url.params["q"] == "Show S02E05"
+        asyncio.run(
+            adapter.search(Query(media_type=MediaType.TV, text="Show", season=2))
+        )
+        assert route.calls.last.request.url.params["q"] == "Show S02"
+        asyncio.run(
+            adapter.search(
+                Query(
+                    media_type=MediaType.TV,
+                    text="Naruto",
+                    season=2,
+                    episode=5,
+                    anime=True,
+                )
+            )
+        )
+        assert route.calls.last.request.url.params["q"] == "Naruto"
+
+
+def test_animetosho_supports_and_movie_media_type(tmp_path):
+    """3.2: supports covers TV + MOVIE; movie queries propagate the media type."""
+    html = open("tests/fixtures/animetosho_search.html", encoding="utf-8").read()
+    isolated = HttpClient(cfg(), cache_dir=tmp_path)
+    adapter = AnimetoshoAdapter("https://animetosho.net", isolated)
+    assert adapter.supports(MediaType.TV)
+    assert adapter.supports(MediaType.MOVIE)
+    with respx.mock:
+        respx.get("https://animetosho.net/search").mock(
+            return_value=httpx.Response(200, text=html)
+        )
+        out = asyncio.run(
+            adapter.search(Query(media_type=MediaType.MOVIE, text="Demon Slayer"))
+        )
+    assert len(out) == 2
+    assert all(r.media_type == MediaType.MOVIE for r in out)
+
+
+def test_animetosho_search_not_found_is_empty(tmp_path):
+    """3.2: A 404 search response yields an empty list without raising."""
+    isolated = HttpClient(cfg(), cache_dir=tmp_path)
+    with respx.mock:
+        respx.get("https://animetosho.net/search").mock(
+            return_value=httpx.Response(404, text="Not Found")
+        )
+        out = asyncio.run(
+            AnimetoshoAdapter("https://animetosho.net", isolated).search(
+                Query(media_type=MediaType.TV, text="Nothing Here")
+            )
+        )
+    assert out == []
+
+
+def test_animetosho_search_malformed_raises(tmp_path):
+    """3.2: An unrecognized page shape raises SchemaMismatchError (fan-out isolates it)."""
+    isolated = HttpClient(cfg(), cache_dir=tmp_path)
+    with respx.mock:
+        respx.get("https://animetosho.net/search").mock(
+            return_value=httpx.Response(
+                200, text="<html><body><h1>weird</h1></body></html>"
+            )
+        )
+        with pytest.raises(SchemaMismatchError):
+            asyncio.run(
+                AnimetoshoAdapter("https://animetosho.net", isolated).search(
+                    Query(media_type=MediaType.TV, text="Weird")
+                )
+            )
+
+
+def test_build_adapters_includes_animetosho_when_enabled():
+    """3.2: build_adapters includes AnimetoshoAdapter when enabled_indexers has it."""
+    from arr.indexers import build_adapters
+
+    enabled_cfg = dict(DEFAULTS)
+    enabled_cfg["enabled_indexers"] = ["nyaa", "animetosho"]
+    adapters = build_adapters(enabled_cfg)
+    adapter_names = [a.name for a in adapters]
+    assert "animetosho" in adapter_names
+    assert any(isinstance(a, AnimetoshoAdapter) for a in adapters)
+
+
+def test_build_adapters_excludes_animetosho_when_disabled():
+    """3.2: build_adapters excludes AnimetoshoAdapter when it is not enabled."""
+    from arr.indexers import build_adapters
+
+    disabled_cfg = dict(DEFAULTS)
+    disabled_cfg["enabled_indexers"] = ["yts", "eztv", "nyaa", "tpb", "torrentio"]
+    adapters = build_adapters(disabled_cfg)
+    adapter_names = [a.name for a in adapters]
+    assert "animetosho" not in adapter_names
+    assert not any(isinstance(a, AnimetoshoAdapter) for a in adapters)
+
+
+def test_default_priority_places_animetosho_after_nyaa():
+    """3.2: Default config ranks animetosho immediately after nyaa."""
+    assert DEFAULTS["indexer_priority"] == [
+        "yts", "eztv", "nyaa", "animetosho", "tpb", "torrentio"
+    ]
+    assert DEFAULTS["enabled_indexers"] == [
+        "yts", "eztv", "nyaa", "animetosho", "tpb", "torrentio"
+    ]

@@ -205,7 +205,7 @@
         {/if}
       </div>
     {:else}
-      {#each shown as row (row.infohash || row.title)}
+      {#each shown as row, i ((row.infohash || row.title) + ':' + i)}
         {@const isBusy = busyHash === (row.infohash || row.title)}
         <article
           class="rounded-xl p-4 bg-onyx-obsidian/70 hover:bg-onyx-raised/60 border border-onyx-border/80 hover:border-slate-600 transition-colors flex flex-col gap-3"

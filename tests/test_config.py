@@ -68,7 +68,14 @@ def test_config_template_round_trips(tmp_path):
     cfg = load_config(p)
     assert cfg.get("episode_cache_ttl_hours") == 6
     assert cfg.get("resolutions") == ["2160p", "1080p", "720p"]
-    assert cfg.get("request_interval_seconds") == {"yts": 1.0, "eztv": 1.0, "nyaa": 2.0, "tpb": 2.0, "torrentio": 1.0}
+    assert cfg.get("request_interval_seconds") == {
+        "yts": 1.0,
+        "eztv": 1.0,
+        "nyaa": 2.0,
+        "animetosho": 2.0,
+        "tpb": 2.0,
+        "torrentio": 1.0,
+    }
     assert cfg.get("imdb_suggestion_base_url", "").startswith("https://")
 
 
@@ -118,8 +125,8 @@ def test_new_indexer_defaults_load_from_clean_config():
 
     assert DEFAULTS["tpb_base_url"] == "https://thepiratebay.org"
     assert DEFAULTS["torrentio_base_url"] == "http://localhost:8085"
-    assert DEFAULTS["enabled_indexers"] == ["yts", "eztv", "nyaa", "tpb", "torrentio"]
-    assert DEFAULTS["indexer_priority"] == ["yts", "eztv", "nyaa", "tpb", "torrentio"]
+    assert DEFAULTS["enabled_indexers"] == ["yts", "eztv", "nyaa", "animetosho", "tpb", "torrentio"]
+    assert DEFAULTS["indexer_priority"] == ["yts", "eztv", "nyaa", "animetosho", "tpb", "torrentio"]
     riq = DEFAULTS["request_interval_seconds"]
     assert riq["tpb"] == 2.0
     assert riq["torrentio"] == 1.0
@@ -131,8 +138,15 @@ def test_new_defaults_in_config_template():
 
     assert 'tpb_base_url = "https://thepiratebay.org"' in CONFIG_TEMPLATE
     assert 'torrentio_base_url = "http://localhost:8085"' in CONFIG_TEMPLATE
-    assert 'enabled_indexers = ["yts", "eztv", "nyaa", "tpb", "torrentio"]' in CONFIG_TEMPLATE
-    assert 'indexer_priority = ["yts", "eztv", "nyaa", "tpb", "torrentio"]' in CONFIG_TEMPLATE
+    assert 'animetosho_base_url = "https://animetosho.net"' in CONFIG_TEMPLATE
+    assert (
+        'enabled_indexers = ["yts", "eztv", "nyaa", "animetosho", "tpb", "torrentio"]'
+        in CONFIG_TEMPLATE
+    )
+    assert (
+        'indexer_priority = ["yts", "eztv", "nyaa", "animetosho", "tpb", "torrentio"]'
+        in CONFIG_TEMPLATE
+    )
     assert "tpb = 2.0" in CONFIG_TEMPLATE
     assert "torrentio = 1.0" in CONFIG_TEMPLATE
 

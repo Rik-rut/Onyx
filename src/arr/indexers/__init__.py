@@ -1,12 +1,14 @@
+from arr.indexers.animetosho import AnimetoshoAdapter
 from arr.indexers.base import HttpClient, IndexerError, SchemaMismatchError
 from arr.indexers.browser import BrowserSession
 from arr.indexers.eztv import EztvAdapter
 from arr.indexers.nyaa import NyaaAdapter
-from arr.indexers.tpb import TpbAdapter
 from arr.indexers.torrentio import TorrentioAdapter
+from arr.indexers.tpb import TpbAdapter
 from arr.indexers.yts import YtsAdapter
 
 __all__ = [
+    "AnimetoshoAdapter",
     "BrowserSession",
     "EztvAdapter",
     "HttpClient",
@@ -29,6 +31,8 @@ def build_adapters(cfg) -> list:
         adapters.append(EztvAdapter(cfg.get("eztv_base_url"), http))
     if "nyaa" in enabled:
         adapters.append(NyaaAdapter(cfg.get("nyaa_base_url"), http))
+    if "animetosho" in enabled:
+        adapters.append(AnimetoshoAdapter(cfg.get("animetosho_base_url"), http))
     if "tpb" in enabled:
         adapters.append(TpbAdapter(cfg.get("tpb_base_url"), http))
     if "torrentio" in enabled:

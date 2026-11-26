@@ -26,6 +26,7 @@ DEFAULTS: dict = {
     "yts_base_url": "https://yts.lt",
     "eztv_base_url": "https://eztv.re",
     "nyaa_base_url": "https://nyaa.si",
+    "animetosho_base_url": "https://animetosho.net",
     "tvmaze_base_url": "https://api.tvmaze.com",
     "tvmaze_catalog_pages": 12,
     "imdb_base_url": "https://www.imdb.com",
@@ -58,11 +59,18 @@ DEFAULTS: dict = {
     "resolutions": ["2160p", "1080p", "720p"],
     "cache_ttl_hours": 24,
     "episode_cache_ttl_hours": 6,
-    "request_interval_seconds": {"yts": 1.0, "eztv": 1.0, "nyaa": 2.0, "tpb": 2.0, "torrentio": 1.0},
+    "request_interval_seconds": {
+        "yts": 1.0,
+        "eztv": 1.0,
+        "nyaa": 2.0,
+        "animetosho": 2.0,
+        "tpb": 2.0,
+        "torrentio": 1.0,
+    },
     "tpb_base_url": "https://thepiratebay.org",
     "torrentio_base_url": "http://localhost:8085",
-    "enabled_indexers": ["yts", "eztv", "nyaa", "tpb", "torrentio"],
-    "indexer_priority": ["yts", "eztv", "nyaa", "tpb", "torrentio"],
+    "enabled_indexers": ["yts", "eztv", "nyaa", "animetosho", "tpb", "torrentio"],
+    "indexer_priority": ["yts", "eztv", "nyaa", "animetosho", "tpb", "torrentio"],
     "max_download_speed_kbps": 0,
     "max_upload_speed_kbps": 0,
 }
@@ -96,6 +104,7 @@ transmission_remote = ""
 yts_base_url = "https://yts.lt"
 eztv_base_url = "https://eztv.re"
 nyaa_base_url = "https://nyaa.si"
+animetosho_base_url = "https://animetosho.net"
 tpb_base_url = "https://thepiratebay.org"
 torrentio_base_url = "http://localhost:8085"
 
@@ -118,7 +127,7 @@ max_size_mb_tv = 80000
 # Response caching and per-indexer request spacing (seconds)
 cache_ttl_hours = 24
 episode_cache_ttl_hours = 6
-request_interval_seconds = { yts = 1.0, eztv = 1.0, nyaa = 2.0, tpb = 2.0, torrentio = 1.0 }
+request_interval_seconds = { yts = 1.0, eztv = 1.0, nyaa = 2.0, animetosho = 2.0, tpb = 2.0, torrentio = 1.0 }
 
 subtitle_languages = ["en"]
 subtitles_enabled = true
@@ -140,8 +149,8 @@ unmonitor_ended_series = false
 # unrelated latest torrents when a query does not match).
 title_strict_indexers = ["eztv"]
 # Indexer enablement and priority order.
-enabled_indexers = ["yts", "eztv", "nyaa", "tpb", "torrentio"]
-indexer_priority = ["yts", "eztv", "nyaa", "tpb", "torrentio"]
+enabled_indexers = ["yts", "eztv", "nyaa", "animetosho", "tpb", "torrentio"]
+indexer_priority = ["yts", "eztv", "nyaa", "animetosho", "tpb", "torrentio"]
 
 # Bandwidth speed limits (KB/s, 0 = unlimited)
 max_download_speed_kbps = 0
