@@ -10,6 +10,8 @@ from pathlib import Path
 
 from selectolax.lexbor import LexborHTMLParser as HTMLParser
 
+from arr.metadata.waf import WafCookieProvider, WafError
+
 
 class ImdbError(Exception):
     pass
@@ -30,7 +32,13 @@ def degrade(query: str) -> None:
 
 
 class ImdbClient:
-    def __init__(self, cfg, cache_dir: Path | None = None, session=None):
+    def __init__(
+        self,
+        cfg,
+        cache_dir: Path | None = None,
+        session=None,
+        waf: WafCookieProvider | None = None,
+    ):
         self.cfg = cfg
         self.base = str(cfg.get("imdb_base_url", "https://www.imdb.com")).rstrip("/")
         self.suggestion = str(
@@ -39,20 +47,30 @@ class ImdbClient:
         self.cache_dir = cache_dir or Path(".cache") / "arr" / "imdb"
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self._session = session
+        self._waf = waf if waf is not None else WafCookieProvider(self.cache_dir.parent / "waf")
 
     def _fetch(self, url: str) -> str:
-        try:
-            if self._session is not None:
-                resp = self._session.get(url, timeout=20)
-            else:
-                from curl_cffi import requests
-
-                resp = requests.get(url, impersonate="chrome", timeout=20)
-        except Exception as e:
-            raise ImdbError(f"IMDb request failed: {e}") from e
+        resp = self._http_get(url, self._waf.cookies())
+        if getattr(resp, "status_code", 0) == 202:
+            # AWS WAF challenge: solve it once and retry with the token cookie.
+            try:
+                cookies = self._waf.cookies(force=True)
+            except WafError:
+                cookies = {}
+            resp = self._http_get(url, cookies)
         if getattr(resp, "status_code", 0) != 200:
             raise ImdbError(f"IMDb HTTP {getattr(resp, 'status_code', '?')}")
         return resp.text
+
+    def _http_get(self, url: str, cookies: dict[str, str]):
+        try:
+            if self._session is not None:
+                return self._session.get(url, timeout=20)
+            from curl_cffi import requests
+
+            return requests.get(url, impersonate="chrome", cookies=cookies, timeout=20)
+        except Exception as e:
+            raise ImdbError(f"IMDb request failed: {e}") from e
 
     def _cache_path(self, key: str) -> Path:
         h = hashlib.sha256(key.encode()).hexdigest()[:24]

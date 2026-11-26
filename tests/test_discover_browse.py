@@ -272,7 +272,7 @@ def test_discover_homepage_lists_genres_per_media_type(client: TestClient) -> No
     with (
         patch("arr.metadata.imdb.ImdbClient.trending_movies", return_value=[]),
         patch("arr.metadata.imdb.ImdbClient.top_rated_movies", return_value=[]),
-        patch("arr.metadata.tvmaze.TvmazeClient.trending_tv", return_value=[]),
+        patch("arr.metadata.imdb.ImdbClient.trending_tv", return_value=[]),
     ):
         data = client.get("/api/discover").json()
 

@@ -837,12 +837,15 @@ def test_download_release_allows_new_movie(client: TestClient) -> None:
 
 
 def test_api_discover_returns_rails_with_availability(
-    client: TestClient, test_cfg: Config
+    client: TestClient, test_cfg: Config, tmp_path: Path, monkeypatch
 ) -> None:
     """R4.1: the Discover homepage is one zero-config call away."""
     folder = Path(test_cfg.get("library_root")) / "movies" / "Inception (2010)"
     folder.mkdir(parents=True)
     (folder / "Inception (2010).mkv").write_bytes(b"x" * 256)
+    monkeypatch.setattr(
+        "arr.web.routes.discover._SHOW_ID_MAP_PATH", tmp_path / "imdb_tvmaze_map.json"
+    )
 
     movies = [
         {
@@ -853,11 +856,15 @@ def test_api_discover_returns_rails_with_availability(
             "rating": 8.8,
         }
     ]
-    tv = [{"id": 3, "title": "Space Anime", "year": 2022, "poster": "s.jpg", "rating": 8.4}]
+    tv = [{"imdb_id": "tt0903747", "title": "Breaking Bad", "year": 2008, "rating": 9.5}]
     with (
         patch("arr.metadata.imdb.ImdbClient.trending_movies", return_value=movies),
         patch("arr.metadata.imdb.ImdbClient.top_rated_movies", return_value=movies),
-        patch("arr.metadata.tvmaze.TvmazeClient.trending_tv", return_value=tv),
+        patch("arr.metadata.imdb.ImdbClient.trending_tv", return_value=tv),
+        patch(
+            "arr.metadata.tvmaze.TvmazeClient.search_tv_shows",
+            return_value=[{"id": 3, "name": "Breaking Bad", "externals": {"imdb": "tt0903747"}}],
+        ),
     ):
         resp = client.get("/api/discover")
         assert resp.status_code == 200
@@ -867,7 +874,8 @@ def test_api_discover_returns_rails_with_availability(
     assert data["trending_movies"][0]["in_library"] is True
     assert data["trending_movies"][0]["library_status"] == "available"
     assert data["top_rated_movies"][0]["title"] == "Inception"
-    assert data["trending_tv"][0]["title"] == "Space Anime"
+    assert data["trending_tv"][0]["title"] == "Breaking Bad"
+    assert data["trending_tv"][0]["tmdb_id"] == 3
     assert data["spotlight"]["title"] == "Inception"
     assert "Action" in data["genres"]
 
@@ -877,7 +885,7 @@ def test_api_discover_survives_offline_scrapers(client: TestClient) -> None:
     with (
         patch("arr.metadata.imdb.ImdbClient.trending_movies", return_value=[]),
         patch("arr.metadata.imdb.ImdbClient.top_rated_movies", return_value=[]),
-        patch("arr.metadata.tvmaze.TvmazeClient.trending_tv", return_value=[]),
+        patch("arr.metadata.imdb.ImdbClient.trending_tv", return_value=[]),
     ):
         resp = client.get("/api/discover")
     assert resp.status_code == 200

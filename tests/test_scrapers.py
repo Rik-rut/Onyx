@@ -7,6 +7,7 @@ import respx
 
 from arr.config.settings import DEFAULTS, Config
 from arr.metadata.imdb import ImdbClient, ImdbError
+from arr.metadata.waf import WafError
 from arr.subtitles.base import SubtitleError
 from arr.subtitles.subscene import SubsceneClient
 from arr.subtitles.yify import YifySubtitlesClient
@@ -205,6 +206,55 @@ def test_imdb_trending_movies_falls_back_offline(tmp_path):
 
     assert len(items) == 3
     assert all(i["imdb_id"].startswith("tt") for i in items)
+    assert all(i["title"] for i in items)
+
+
+class FakeWaf:
+    def __init__(self, cookies=None, force_error=False):
+        self.calls = []
+        self._cookies = cookies or {}
+        self._force_error = force_error
+
+    def cookies(self, force=False):
+        self.calls.append(force)
+        if force and self._force_error:
+            raise WafError("browser unavailable")
+        return self._cookies
+
+
+def test_imdb_fetch_solves_waf_challenge(tmp_path):
+    """A 202 challenge is retried once with the freshly solved token cookie."""
+
+    class ChallengeSession:
+        def __init__(self):
+            self.n = 0
+
+        def get(self, url, timeout=None, **kw):
+            self.n += 1
+            if self.n == 1:
+                return FakeResponse(202, "challenge")
+            return FakeResponse(200, _chart_html(MOVIEMETER_ITEMS))
+
+    session = ChallengeSession()
+    waf = FakeWaf({"aws-waf-token": "abc"})
+    c = ImdbClient(cfg(), cache_dir=tmp_path, session=session, waf=waf)
+
+    items = c.trending_movies(limit=5)
+
+    assert items and items[0]["imdb_id"] == "tt1375666"
+    assert waf.calls == [False, True]
+    assert session.n == 2
+
+
+def test_imdb_fetch_waf_unavailable_keeps_curated_fallback(tmp_path):
+    """When the browser cannot solve the challenge, the curated rail still shows."""
+    session = FakeSession({"/chart/moviemeter/": FakeResponse(202, "challenge")})
+    waf = FakeWaf(force_error=True)
+    c = ImdbClient(cfg(), cache_dir=tmp_path, session=session, waf=waf)
+
+    items = c.trending_movies(limit=3)
+
+    assert len(items) == 3
     assert all(i["title"] for i in items)
 
 

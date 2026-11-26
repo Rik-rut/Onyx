@@ -8,6 +8,9 @@ unreachable or bot-blocked.
 from __future__ import annotations
 
 import asyncio
+import json
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
@@ -44,6 +47,67 @@ GENRES_BY_TYPE = {"movie": MOVIE_GENRES, "tv": list(DISCOVER_GENRES)}
 PAGE_SIZE = 20
 
 
+# IMDb -> TVMaze show ID resolutions. Show IDs are stable, so the mapping only
+# ever grows; newly trending shows are the ones that cost a TVMaze search.
+_SHOW_ID_MAP_PATH = Path(".cache") / "arr" / "imdb_tvmaze_map.json"
+
+
+def _load_show_id_map() -> dict[str, int]:
+    try:
+        data = json.loads(_SHOW_ID_MAP_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {str(k): int(v) for k, v in data.items() if isinstance(v, int)}
+
+
+def _save_show_id_map(mapping: dict[str, int]) -> None:
+    try:
+        _SHOW_ID_MAP_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _SHOW_ID_MAP_PATH.write_text(json.dumps(mapping), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _attach_show_ids(cfg, items: list[dict]) -> list[dict]:
+    """Attach TVMaze show IDs to IMDb TV items so cards navigate and badges work.
+
+    IMDb's TVMeter yields only ``imdb_id``; the SPA navigates by TVMaze ID.
+    """
+    if not items:
+        return items
+    known = _load_show_id_map()
+    tvmaze = TvmazeClient(cfg)
+
+    def resolve(item: dict) -> None:
+        imdb_id = str(item.get("imdb_id") or "")
+        if not imdb_id or item.get("tmdb_id") is not None:
+            return
+        cached = known.get(imdb_id)
+        if cached is not None:
+            item["tmdb_id"] = cached
+            return
+        title = str(item.get("title") or "").lower()
+        try:
+            results = tvmaze.search_tv_shows(item.get("title") or "")
+        except Exception:
+            return
+        match = next(
+            (r for r in results if (r.get("externals") or {}).get("imdb") == imdb_id), None
+        )
+        if match is None:
+            match = next(
+                (r for r in results if str(r.get("name") or "").lower() == title), None
+            )
+        if match is not None:
+            item["tmdb_id"] = int(match["id"])
+            known[imdb_id] = int(match["id"])
+
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        list(pool.map(resolve, items))
+    _save_show_id_map(known)
+    return items
+
+
 def _safe(fn, *args, **kwargs) -> list[dict]:
     """Call a metadata source, degrading to an empty list instead of failing."""
     try:
@@ -59,18 +123,18 @@ async def get_discover(request: Request) -> dict[str, Any]:
     """Trending movies, trending TV, top rated movies and a hero spotlight."""
     cfg = request.app.state.cfg
     imdb = ImdbClient(cfg)
-    tvmaze = TvmazeClient(cfg)
     logger.info("Building Discover homepage")
     try:
         trending_movies, top_rated, trending_tv = await asyncio.gather(
             asyncio.to_thread(_safe, imdb.trending_movies, 20),
             asyncio.to_thread(_safe, imdb.top_rated_movies, 20),
-            asyncio.to_thread(_safe, tvmaze.trending_tv, 20),
+            asyncio.to_thread(_safe, imdb.trending_tv, 20),
         )
         trending_movies = await asyncio.to_thread(
             annotate_availability, cfg, trending_movies, "movie"
         )
         top_rated = await asyncio.to_thread(annotate_availability, cfg, top_rated, "movie")
+        trending_tv = await asyncio.to_thread(_attach_show_ids, cfg, trending_tv)
         trending_tv = await asyncio.to_thread(annotate_availability, cfg, trending_tv, "tv")
 
         candidates = trending_movies or top_rated or trending_tv
