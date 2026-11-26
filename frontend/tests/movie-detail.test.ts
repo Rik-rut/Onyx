@@ -370,3 +370,32 @@ test('declining the duplicate confirmation leaves no second download call', asyn
   expect(toasts()).toHaveLength(0);
   expect(rendered.container.querySelector('[data-testid="download-best"]')).toBeTruthy();
 });
+
+test('hero row top-aligns, synopsis clamps, and poster box keeps its 2:3 geometry', async () => {
+  installFetch(
+    {
+      '/api/movie/tt999/details': detailBody('tt999', 'Geometry Check', false, []),
+    },
+    [],
+  );
+  setLocation('/movie/tt999', '');
+  const rendered = render(MovieDetailPage);
+  await waitFor(() => rendered.container.querySelector('[data-testid="movie-title"]') !== null);
+
+  // The hero row is top-aligned, so a tall text column can't stretch the poster box.
+  const heroRow = Array.from(
+    rendered.container.querySelectorAll('[data-testid="movie-backdrop"] > div'),
+  ).find((el) => el.className.includes('md:flex-row'));
+  expect(heroRow).toBeTruthy();
+  expect(heroRow!.className).toContain('items-start');
+
+  // The poster box keeps its 2:3 aspect class.
+  const posterBox = rendered.container.querySelector('[data-testid="movie-poster"]')!.parentElement;
+  expect(posterBox!.className).toContain('aspect-[2/3]');
+
+  // The synopsis is line-clamped to 4 lines, keeping its max-w-3xl constraint.
+  const synopsis = rendered.container.querySelector('[data-testid="movie-synopsis"]');
+  expect(synopsis!.className).toContain('line-clamp-4');
+  expect(synopsis!.className).toContain('max-w-3xl');
+  restore();
+});

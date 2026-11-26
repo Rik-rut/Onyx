@@ -24,5 +24,8 @@
     "typescript": "^5",
     "vite": "^6",
     "vitest": "^4"
+  },
+  "devDependencies": {
+    "playwright": "^1.65.1"
   }
 }

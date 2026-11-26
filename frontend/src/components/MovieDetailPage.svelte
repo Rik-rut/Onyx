@@ -208,7 +208,7 @@
       {/if}
       <div class="absolute inset-0 bg-gradient-to-r from-onyx-obsidian via-onyx-obsidian/92 to-onyx-obsidian/60 pointer-events-none"></div>
 
-      <div class="relative p-5 sm:p-8 flex flex-col md:flex-row gap-6 lg:gap-8">
+      <div class="relative p-5 sm:p-8 flex flex-col md:flex-row items-start gap-6 lg:gap-8">
         <!-- Portrait 2:3 Poster -->
         <div class="w-40 sm:w-48 md:w-52 shrink-0 aspect-[2/3] rounded-xl overflow-hidden bg-onyx-raised border border-white/10 shadow-2xl shadow-black/70">
           {#if details.poster && !page.posterBroken}
@@ -257,7 +257,7 @@
             {/if}
 
             {#if details.overview}
-              <p class="text-sm text-slate-300 leading-relaxed max-w-3xl" data-testid="movie-synopsis">
+              <p class="text-sm text-slate-300 leading-relaxed max-w-3xl line-clamp-4" data-testid="movie-synopsis">
                 {details.overview}
               </p>
             {:else if details.degraded}
