@@ -47,7 +47,7 @@ def test_top_level_casaos_block_has_required_fields() -> None:
     assert casaos["index"] == "/"
     assert casaos["port_map"] == "3698"
     assert casaos["scheme"] == "http"
-    assert casaos["version"] == "0.1.1"
+    assert casaos["version"] == "0.1.2"
     assert casaos["category"] == "Media"
     assert casaos["architectures"] == ["amd64", "arm64"]
 

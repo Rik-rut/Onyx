@@ -133,7 +133,7 @@ The compose file:
 name: onyx
 services:
   onyx:
-    image: onyx:latest
+    image: localhost/onyx:latest
     build:
       context: .
       dockerfile: Dockerfile
@@ -171,7 +171,7 @@ x-casaos:
   architectures:
     - amd64
     - arm64
-  version: "0.1.1"
+  version: "0.1.2"
 ```
 
 ## Troubleshooting
