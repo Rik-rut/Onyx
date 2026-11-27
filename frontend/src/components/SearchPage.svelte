@@ -3,7 +3,7 @@
      resilience. -->
 <script lang="ts">
   import PosterCard from './PosterCard.svelte';
-  import { navigate, pathFor, route } from '../lib/router.svelte';
+  import { route } from '../lib/router.svelte';
   import { perform, errors, movies, retryMovies, retryTv, tv } from '../lib/stores/search.svelte';
   import { findMovie, findShow } from '../lib/stores/library.svelte';
   import type { MediaItem } from '../lib/api';
@@ -11,11 +11,9 @@
   const match = $derived(route());
   const query = $derived(match?.view === 'search' ? match.params.q ?? '' : '');
 
-  let draftQuery = $state('');
   let searching = $state(false);
 
   $effect(() => {
-    draftQuery = query;
     if (query) {
       searching = true;
       void perform(query).finally(() => {
@@ -48,42 +46,17 @@
     if (Number.isNaN(numeric)) return null;
     return findShow(numeric) ? String(id) : null;
   }
-
-  function submitInlineSearch(event: SubmitEvent): void {
-    event.preventDefault();
-    const cleaned = draftQuery.trim();
-    if (!cleaned) return;
-    navigate(pathFor('search', { q: cleaned }));
-  }
 </script>
 
 <div class="flex flex-col gap-6" data-testid="search-page" data-query={query}>
-  <!-- Header + inline search bar -->
-  <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-    <div>
-      <h1 class="text-2xl sm:text-3xl font-black text-white tracking-tight" data-testid="search-heading">
-        {query ? `Search “${query}”` : 'Search'}
-      </h1>
-      <p class="mt-1 text-xs sm:text-sm text-slate-400">
-        Searching IMDb movies and TVMaze series in parallel
-      </p>
-    </div>
-
-    <form class="flex items-center gap-2 w-full sm:w-auto" onsubmit={submitInlineSearch}>
-      <input
-        type="search"
-        bind:value={draftQuery}
-        placeholder="Search another title…"
-        aria-label="Search query"
-        class="flex-1 sm:w-64 rounded-xl px-3.5 py-2 bg-onyx-surface border border-onyx-border text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
-      />
-      <button
-        type="submit"
-        class="rounded-xl px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold transition-colors cursor-pointer"
-      >
-        Search
-      </button>
-    </form>
+  <!-- Header -->
+  <div>
+    <h1 class="text-2xl sm:text-3xl font-black text-white tracking-tight" data-testid="search-heading">
+      {query ? `Search “${query}”` : 'Search'}
+    </h1>
+    <p class="mt-1 text-xs sm:text-sm text-slate-400">
+      Searching IMDb movies and TVMaze series in parallel
+    </p>
   </div>
 
   <!-- Segmented filter tabs -->
@@ -241,7 +214,7 @@
       aria-live="polite"
     >
       <span data-testid="search-empty-message">
-        {query ? `No results for “${query}”. Check the spelling or try a different title.` : 'Enter a movie or TV show title above to search.'}
+        {query ? `No results for “${query}”. Check the spelling or try a different title.` : 'Use the search bar at the top of the screen or press Ctrl+K to search.'}
       </span>
     </div>
   {/if}

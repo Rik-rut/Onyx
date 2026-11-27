@@ -98,22 +98,92 @@ class ImdbClient:
             self.search_movie, "_mock_return_value"
         ):
             res = self.search_movie(query)
-            return [res] if res else []
+            return self._movie_entries([res] if res else [])
         try:
             html = self._cached_get(f"search:{query}", f"{self.base}/find/?q={query}")
             found = self._parse_all_search_results(html)
             if found:
-                return found
+                return self._movie_entries(found)
         except ImdbError:
             pass
-        return self._search_all_suggestions(query)
+        return self._movie_entries(self._search_all_suggestions(query))
+
+    @staticmethod
+    def _movie_entries(items: list[dict]) -> list[dict]:
+        return [r for r in items if "tv" not in str((r or {}).get("type") or "").lower()]
 
     def search_movie(self, query: str) -> dict | None:
         movies = self.search_movies(query)
         return movies[0] if movies else None
 
     @staticmethod
+    def _parse_find_results(html: str) -> list[dict]:
+        """Title results from the find page's `__NEXT_DATA__` (typed, with posters)."""
+        data = _next_data(html)
+        page_props = ((data.get("props") or {}).get("pageProps")) or {}
+        title_results = page_props.get("titleResults") or {}
+        results = title_results.get("results") if isinstance(title_results, dict) else None
+        if not isinstance(results, list):
+            return []
+        items: list[dict] = []
+        seen: set[str] = set()
+        for node in results:
+            if not isinstance(node, dict):
+                continue
+            li = node.get("listItem") or {}
+            if not isinstance(li, dict):
+                continue
+            imdb_id = str(li.get("titleId") or node.get("index") or "")
+            if not imdb_id.startswith("tt") or imdb_id in seen:
+                continue
+            title = _text_or_plain(li.get("titleText")) or _text_or_plain(
+                li.get("originalTitleText")
+            )
+            if not title:
+                continue
+            tt = li.get("titleType") or {}
+            type_id = str(tt.get("id") or "").strip().lower() if isinstance(tt, dict) else ""
+            type_text = str(tt.get("text") or "").strip() if isinstance(tt, dict) else ""
+            if type_text:
+                media_type = type_text
+            elif type_id == "movie":
+                media_type = "Movie"
+            elif type_id:
+                media_type = "TV Series"
+            else:
+                media_type = "Movie"
+            seen.add(imdb_id)
+            year = li.get("releaseYear")
+            poster = ""
+            image = li.get("primaryImage")
+            if isinstance(image, dict):
+                poster = str(image.get("url") or "")
+            rating = None
+            rating_summary = li.get("ratingSummary")
+            if isinstance(rating_summary, dict):
+                value = rating_summary.get("aggregateRating")
+                if isinstance(value, (int, float)):
+                    rating = value
+            items.append(
+                {
+                    "id": imdb_id,
+                    "imdb_id": imdb_id,
+                    "title": title,
+                    "year": year if isinstance(year, int) else None,
+                    "poster": poster,
+                    "rating": rating,
+                    "type": media_type,
+                }
+            )
+            if len(items) >= 10:
+                break
+        return items
+
+    @staticmethod
     def _parse_all_search_results(html: str) -> list[dict]:
+        found = ImdbClient._parse_find_results(html)
+        if found:
+            return found
         tree = HTMLParser(html)
         results: list[dict] = []
         seen: set[str] = set()
@@ -595,6 +665,11 @@ def _split_stars(value) -> list[str]:
         return []
     return [part.strip() for part in value.split(",") if part.strip()]
 
+
+def _text_or_plain(obj) -> str:
+    if isinstance(obj, dict):
+        return str(obj.get("text") or "").strip()
+    return str(obj or "").strip()
 
 def _next_data(html: str) -> dict:
     """Parsed `__NEXT_DATA__` payload, or an empty dict when absent/invalid."""

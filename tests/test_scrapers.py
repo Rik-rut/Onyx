@@ -83,6 +83,69 @@ def test_imdb_search_movies_multiple(tmp_path):
     assert movies[1]["title"] == "Movie Two"
     assert movies[1]["year"] == 2022
 
+def _find_page_html(results):
+    payload = {"props": {"pageProps": {"titleResults": {"results": results}}}}
+    return (
+        '<html><body>'
+        '<script id="__NEXT_DATA__" type="application/json">'
+        + json.dumps(payload)
+        + "</script>"
+        '<a href="/title/tt9999999/">Junk Name Bio</a>'
+        "</body></html>"
+    )
+
+
+def _tv_series_node():
+    return {
+        "index": "tt1111111",
+        "listItem": {
+            "titleId": "tt1111111",
+            "titleText": "The Rookie",
+            "titleType": {"canHaveEpisodes": True, "id": "tvSeries", "text": "TV Series"},
+            "releaseYear": 2018,
+            "primaryImage": {"url": "https://img.example/rookie.jpg"},
+            "ratingSummary": {"aggregateRating": 8, "voteCount": 140345},
+        },
+    }
+
+
+def _movie_node():
+    return {
+        "index": "tt2222222",
+        "listItem": {
+            "titleId": "tt2222222",
+            "titleText": "Inception",
+            "titleType": {"canHaveEpisodes": False, "id": "movie", "text": ""},
+            "releaseYear": 2010,
+            "primaryImage": {"url": "https://img.example/inception.jpg"},
+            "ratingSummary": {"aggregateRating": 8.8, "voteCount": 3000000},
+        },
+    }
+
+
+def test_imdb_search_movies_parses_next_data_find_page(tmp_path):
+    html = _find_page_html([_tv_series_node(), _movie_node()])
+    session = FakeSession({"/find/": FakeResponse(200, html)})
+    c = ImdbClient(cfg(), cache_dir=tmp_path, session=session)
+    movies = c.search_movies("test")
+    assert [m["imdb_id"] for m in movies] == ["tt2222222"]
+    assert movies[0]["title"] == "Inception"
+    assert movies[0]["year"] == 2010
+    assert movies[0]["poster"] == "https://img.example/inception.jpg"
+    assert movies[0]["rating"] == 8.8
+    assert movies[0]["type"] == "Movie"
+
+
+def test_imdb_search_movie_skips_tv_typed_find_results(tmp_path):
+    html = _find_page_html([_tv_series_node(), _movie_node()])
+    session = FakeSession({"/find/": FakeResponse(200, html)})
+    c = ImdbClient(cfg(), cache_dir=tmp_path, session=session)
+    m = c.search_movie("test")
+    assert m is not None
+    assert m["imdb_id"] == "tt2222222"
+    assert m["title"] == "Inception"
+
+
 
 
 def test_imdb_movie_details(tmp_path):
