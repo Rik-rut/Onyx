@@ -135,7 +135,7 @@ services:
   onyx:
     image: localhost/onyx:latest
     build:
-      context: .
+      context: https://github.com/Rik-rut/Onyx.git#master
       dockerfile: Dockerfile
     container_name: onyx
     restart: unless-stopped
