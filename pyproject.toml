@@ -48,7 +48,7 @@ addopts = "-m 'not integration'"
 target-version = "py311"
 src = ["src"]
 line-length = 100
-extend-exclude = ["agent", "logs", ".venv", "/arr"]
+extend-exclude = ["logs", ".venv", "/arr"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "W"]

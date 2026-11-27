@@ -34,7 +34,7 @@ x-casaos:
   index: /
   port_map: "3698"
   scheme: http
-  icon: https://raw.githubusercontent.com/<owner>/<repo>/main/assets/onyx.svg
+  icon: https://raw.githubusercontent.com/Rik-rut/Onyx/master/assets/onyx.svg
   title:
     en_US: Onyx Media Discovery & Downloader
   tagline:

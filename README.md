@@ -124,8 +124,63 @@ Nothing needs to be configured to get started. The important settings are
 directly: Settings → App Store → *Import from compose file* → select
 `docker-compose.yml`. The app appears as **Onyx Media Discovery &
 Downloader**, exposing the web dashboard on port 3698 plus the Transmission
-ports (9091, 51413 tcp/udp). The `id` and `icon` fields are placeholders until
-the repository is published — point them at the public repo, then re-import.
+ports (9091, 51413 tcp/udp). After pulling a newer version, re-import the
+same file in ZimaOS to pick up the changes.
+
+The compose file:
+
+```yaml
+name: onyx
+services:
+  onyx:
+    image: onyx:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: onyx
+    restart: unless-stopped
+    ports:
+      - "3698:3698"
+      - "9091:9091"
+      - "51413:51413"
+      - "51413:51413/udp"
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - TZ=${TZ:-UTC}
+    volumes:
+      - /DATA/AppData/onyx/config:/config
+      - /DATA/AppData/onyx/downloads/movies:/downloads/movies
+      - /DATA/AppData/onyx/downloads/tv-shows:/downloads/tv-shows
+  torrentio-scraper:
+    image: ghcr.io/th3r0b/torrentio-scraper:latest
+    container_name: torrentio-scraper
+    restart: unless-stopped
+    ports:
+      - "8085:8080"
+    environment:
+      - PROVIDERS=YTS,EZTV,Nyaa,1337x,ThePirateBay
+x-casaos:
+  id: com.onyx.media
+  main: onyx
+  index: /
+  port_map: "3698"
+  scheme: http
+  icon: https://raw.githubusercontent.com/Rik-rut/Onyx/master/assets/onyx.svg
+  title:
+    en_US: Onyx Media Discovery & Downloader
+  tagline:
+    en_US: Automated Movie & TV Torrent Downloader & Library Manager
+  description:
+    en_US: Onyx autonomously discovers, downloads, and organises movies and TV shows with zero API keys.
+  author: Rikrut
+  developer: Rikrut
+  category: Media
+  architectures:
+    - amd64
+    - arm64
+  version: "0.1.0"
+```
 
 ## Troubleshooting
 

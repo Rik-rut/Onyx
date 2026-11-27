@@ -5,7 +5,7 @@ __pycache__/
 .venv/
 venv/
 
-# OpenCode & Controller logs
+# Logs
 logs/*.log
 !logs/.gitkeep
 
@@ -15,7 +15,6 @@ logs/*.log
 # Runtime DB / HTTP caches
 .cache/
 downloads/
-agent/
 screenshots/
 openspec/
 .agents/
