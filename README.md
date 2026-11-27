@@ -120,12 +120,13 @@ Nothing needs to be configured to get started. The important settings are
 
 ## Running on a server (ZimaOS)
 
-`docker-compose.yml` carries a `x-casaos` block so ZimaOS can import it
-directly: Settings → App Store → *Import from compose file* → select
-`docker-compose.yml`. The app appears as **Onyx Media Discovery &
-Downloader**, exposing the web dashboard on port 3698 plus the Transmission
-ports (9091, 51413 tcp/udp). After pulling a newer version, re-import the
-same file in ZimaOS to pick up the changes.
+`docker-compose.yml` carries a `x-casaos` block and pulls the pre-built
+multi-arch image (`ghcr.io/rik-rut/onyx:latest`), so ZimaOS can import it
+directly without cloning the repository: Settings → App Store → *Import from
+compose file* → select `docker-compose.yml`. The app appears as **Onyx Media
+Discovery & Downloader**, exposing the web dashboard on port 3698 plus the
+Transmission ports (9091, 51413 tcp/udp). After a new release is published,
+re-import or update the app in ZimaOS to pull the latest image.
 
 The compose file:
 
@@ -133,10 +134,7 @@ The compose file:
 name: onyx
 services:
   onyx:
-    image: localhost/onyx:latest
-    build:
-      context: https://github.com/Rik-rut/Onyx.git#master
-      dockerfile: Dockerfile
+    image: ghcr.io/rik-rut/onyx:latest
     container_name: onyx
     restart: unless-stopped
     ports:
@@ -145,9 +143,9 @@ services:
       - "51413:51413"
       - "51413:51413/udp"
     environment:
-      - PUID=${PUID:-1000}
-      - PGID=${PGID:-1000}
-      - TZ=${TZ:-UTC}
+      - PUID=1000
+      - PGID=1000
+      - TZ=UTC
     volumes:
       - /DATA/AppData/onyx/config:/config
       - /DATA/AppData/onyx/downloads/movies:/downloads/movies
@@ -171,7 +169,7 @@ x-casaos:
   architectures:
     - amd64
     - arm64
-  version: "0.1.2"
+  version: "0.1.3"
 ```
 
 ## Troubleshooting

@@ -1,10 +1,7 @@
 name: onyx
 services:
   onyx:
-    image: localhost/onyx:latest
-    build:
-      context: https://github.com/Rik-rut/Onyx.git#master
-      dockerfile: Dockerfile
+    image: ghcr.io/rik-rut/onyx:latest
     container_name: onyx
     restart: unless-stopped
     ports:
@@ -13,9 +10,9 @@ services:
       - "51413:51413"
       - "51413:51413/udp"
     environment:
-      - PUID=${PUID:-1000}
-      - PGID=${PGID:-1000}
-      - TZ=${TZ:-UTC}
+      - PUID=1000
+      - PGID=1000
+      - TZ=UTC
     volumes:
       - /DATA/AppData/onyx/config:/config
       - /DATA/AppData/onyx/downloads/movies:/downloads/movies
@@ -39,4 +36,4 @@ x-casaos:
   architectures:
     - amd64
     - arm64
-  version: "0.1.2"
+  version: "0.1.3"

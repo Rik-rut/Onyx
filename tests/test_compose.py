@@ -47,7 +47,7 @@ def test_top_level_casaos_block_has_required_fields() -> None:
     assert casaos["index"] == "/"
     assert casaos["port_map"] == "3698"
     assert casaos["scheme"] == "http"
-    assert casaos["version"] == "0.1.2"
+    assert casaos["version"] == "0.1.3"
     assert casaos["category"] == "Media"
     assert casaos["architectures"] == ["amd64", "arm64"]
 
@@ -87,3 +87,10 @@ def test_library_volumes_use_zimaos_import_paths() -> None:
         "/DATA/AppData/onyx/downloads/movies:/downloads/movies",
         "/DATA/AppData/onyx/downloads/tv-shows:/downloads/tv-shows",
     ]
+
+
+def test_image_uses_published_registry_without_build_block() -> None:
+    service = load_compose()["services"]["onyx"]
+    assert service["image"] == "ghcr.io/rik-rut/onyx:latest"
+    assert "build" not in service
+    assert service["environment"] == ["PUID=1000", "PGID=1000", "TZ=UTC"]
