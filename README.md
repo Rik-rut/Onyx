@@ -1,145 +1,97 @@
-# arr
+# Onyx
 
-CLI client that searches public torrent indexers (YTS for movies, EZTV for TV, Nyaa for anime,
-The Pirate Bay (TPB) for TV/movies via headless browser scraping, and Torrentio as a self-hosted
-sidecar for reliable aggregated results), ranks releases by seeders/quality, hands the chosen
-No GUI/TUI. See `LEGAL.md` for the legal posture and `GOTCHAS.md` for known failure modes.
+Onyx helps you find and download movies and TV shows from public torrent
+indexers, then puts them in a tidy folder layout that Plex, Jellyfin and
+similar media servers can read. No accounts, no API keys, no cloud service —
+it runs entirely on your own machine.
 
-## Requirements
+It ships with a web dashboard (the easiest way to use it), an interactive
+console app, and a plain command-line tool.
 
-- [uv](https://docs.astral.sh/uv/) (manages Python + deps; no `pip`/`venv` commands)
-- `transmission-daemon` + `transmission-remote` on PATH (Windows probe also checks `%ProgramFiles%\Transmission`)
-- Optional: `ffmpeg` (`.ass`/`.sub` → `.srt` conversion)
+## What it does
 
-No API keys are required. TV metadata comes from the free TVMaze REST API; movie metadata (IMDb) and
-subtitles (Subscene, YIFY Subtitles) are scraped with `curl_cffi` browser impersonation.
+- **Searches** movies, TV shows and anime across public indexers (YTS, EZTV,
+  Nyaa, animetosho, The Pirate Bay and a Torrentio sidecar).
+- **Ranks** the results by seeders and quality so you can pick the best one
+  in seconds.
+- **Downloads** the chosen release via a local Transmission daemon (the
+  actual download engine — Onyx never stores your data itself).
+- **Imports** finished downloads into a clean folder layout named in the
+  Sonarr/Radarr style, so Plex/Jellyfin recognise the files without manual
+  matching.
+- **Adds English subtitles** next to each movie/episode by default.
+- **Monitors** TV shows you care about and downloads new episodes as they
+  air (optional).
+- **Seeds** downloads for a configurable time/ratio before removing them,
+  or keeps them until you tell it to stop.
 
-## Install / run
+## Quick start (web dashboard — recommended)
 
-Windows:
+Requirements:
+
+- [uv](https://docs.astral.sh/uv/) — the Python/tool manager (one install,
+  no other Python setup)
+- Transmission (the download daemon) — install from
+  [transmission-torrent.com](https://transmission-torrent.com/) and make sure
+  `transmission-daemon` is available on your PATH
+- Optional: ffmpeg, for converting `.ass`/`.sub` subtitles to `.srt`
+
+Then:
 
 ```bat
-run.bat                :: first run: uv sync, then launches interactive CLI
-run.bat search movie "Inception"
-run.bat download movie "Inception" --auto
+:: Windows
+run.bat web
 ```
-
-Linux/macOS:
 
 ```sh
-chmod +x run.sh
-./run.sh               :: first run: uv sync, then launches interactive CLI
-./run.sh --help
+# Linux/macOS
+./run.sh web
 ```
 
-Development:
+The dashboard opens in your browser automatically — and if Transmission isn't already running, Onyx starts it for you. If it doesn't open, go to **http://localhost:3698**. The first time you log in you will use the default credentials `admin` / `1234` — the app will ask you to change them immediately, and it will not let you use the dashboard until you have.
+
+From there:
+
+1. **Discover** — browse what's popular right now, or use **Search** to look
+   for a specific movie or show.
+2. Pick a release and hit download.
+3. Watch progress in **Queue**.
+4. Once the download finishes, it appears in **Library**, named and foldered
+   for your media server.
+
+## Using the console
+
+If you prefer the terminal, double-click `run.bat` (or `./run.sh`) with no
+arguments to launch the interactive console — it walks you through search,
+download and monitoring from a menu.
+
+The plain command-line tool is also available:
 
 ```sh
-uv sync
-uv run pytest
-uv run ruff check .
-uv run mypy arr
+arr search movie "Inception"
+arr download movie "Inception" --auto
+arr series add "Breaking Bad"
+arr daemon          # background monitor loop for TV shows
 ```
 
-## Config
+Run `arr --help` for the full list.
 
-`arr config init` writes a documented template. Default paths:
-`%APPDATA%\arr\config.toml` (Windows), `$XDG_CONFIG_HOME/arr/config.toml` or
-`~/.config/arr/config.toml` (Linux/macOS). Override with `--config <path>`.
-
-`arr config show` prints effective config with secrets redacted (`--show-secrets` to reveal).
-`--transmission-remote <path>` (global option) overrides the `transmission-remote` binary path.
-
-Key settings: `download_root`, `library_root`,
-`transmission_rpc_*`, `yts_base_url`/`eztv_base_url`/`nyaa_base_url`/`tpb_base_url`/`torrentio_base_url`,
-`tvmaze_base_url`/`imdb_base_url`/`subscene_base_url`/`yify_subtitles_base_url`,
-`enabled_indexers` (default `["yts","eztv","nyaa","tpb","torrentio"]`),
-`indexer_priority` (default `["yts","eztv","nyaa","tpb","torrentio"]`),
-`subtitles_enabled`, `subtitles_forced_only`, `monitor_poll_interval_minutes`,
-`monitor_lookahead_days`, `unmonitor_ended_series`.
-
-## Web login
-
-The web UI (port 3698) is protected by a local account. On first start the
-default credentials are `admin` / `1234`; the app logs a warning while the
-default account is in use and forces a credential change on the first login
-(`ChangeCredentialsGate` blocks every view until the new username/password is
-saved). Credentials are stored as a salted PBKDF2-HMAC-SHA256 hash in
-`auth.toml`, next to `config.toml` (or next to the file passed via
-`--config`); the plaintext password is never persisted.
-
-Sessions use an httpOnly cookie (`onyx_session`, 7 days). All `/api/*` routes
-and the `/ws/queue` socket return 401 until logged in; the SPA itself
-(`/`, `/login`, static assets) stays open so the login page can render.
-`POST /api/auth/logout` ends the session.
-
-### Importing into ZimaOS
-
-`docker-compose.yml` carries a top-level `x-casaos` block, so ZimaOS imports
-it directly: Settings → App Store → *Import from compose file* → select
-`docker-compose.yml`. The app appears as **Onyx Media Discovery &
-Downloader** (category *Media*) with the Onyx icon, exposing the web
-dashboard on port 3698 plus the Transmission ports (9091, 51413 tcp/udp).
-The `id` and `icon` fields are placeholders until the repository is
-published — point them at the public repo, then re-import.
-
-## Command reference
+## How it works
 
 ```
-arr interactive
-arr search movie <query> [--explain] [--json]
-arr search tv <query> [-s N] [-e N] [--explain] [--json]
-arr download movie <query> [--pick N | --auto] [--yes] [--no-wait] [--force]
-arr download tv <query> [-s N] [-e N] [--pack] [--pick N | --auto] [--yes] [--no-wait] [--force]
-arr series add <query>
-arr series list [--json]
-arr series remove <id> [--delete-files]
-arr series check <id>
-arr queue [--json]
-arr status <id> [--json]
-arr cancel <id> [--delete-data]
-arr import <id> [--overwrite]
-arr daemon
-arr config init|show|path
-arr version
+search  →  pick a release  →  Transmission downloads it  →  Onyx imports it
+                                                          →  library folder + subtitles
 ```
 
-Exit codes: `0` ok, `1` runtime error, `2` usage error/no selection, `3` no results,
-`4` dependency unavailable (transmission/metadata source).
-
-### TV scope rules
-
-- `download tv "Show"` → entire series (all seasons/episodes), printed + confirmed unless `--yes`
-- `-s N` → one season; `-s N -e M` → one episode; `--pack` → prefer a season pack
-- An episode already `imported`/`downloading` is never re-enqueued unless `--force`
-- A chosen season pack marks every episode in that season `imported`
-
-### Monitoring
-
-`series add` resolves the show via TVMaze, records it in `monitored_series`, and does an initial
-whole-series fetch. `arr daemon` runs a tick every `monitor_poll_interval_minutes`: refreshes TVMaze
-(shorter TTL for `Returning Series` episode lists), selects aired-or-lookahead episodes that are not
-already imported/downloading, searches → ranks → enqueues (respecting `max_concurrent_downloads`),
-imports completed downloads, applies the seeding policy, then sleeps. Ended/canceled shows keep
-showing in `series list`; `unmonitor_ended_series = true` auto-removes them. Indexer failures during a
-tick mark affected episodes `retry_pending` and never halt the loop. Ticks are idempotent.
-### New Indexers
-
-- **The Pirate Bay (TPB)** — Headless browser scraping via Playwright. Uses a persistent Chromium
-  profile under the cache directory to mitigate Cloudflare challenges. TV results are constrained
-  to TPB's TV categories so movie rows never leak into TV searches. Malformed rows are skipped
-  gracefully.
-- **Torrentio** — Self-hosted sidecar scraper (default `http://localhost:8085`). Aggregates results
-  from multiple upstream providers (YTS, EZTV, Nyaa, 1337x, ThePirateBay). A connection failure
-  marks the sidecar as down for 60 seconds, during which searches return empty results without
-  network calls.
-
-### Sidecar Service
-
-When running via `docker-compose`, the `torrentio-scraper` service is included as an optional
-sidecar, exposed on host port `8085`. Inside the compose network the `arr` service reaches it at
-`http://torrentio-scraper:8080`; the auto-generated Docker config already points
-`torrentio_base_url` there, while the non-Docker default stays `http://localhost:8085`.
+- **Search** — public indexers are queried and results ranked by seeders/quality.
+- **Download** — the release is handed to the local Transmission daemon; Onyx
+  tracks progress and lets you cancel.
+- **Import** — when the download completes, the file is moved/linked into
+  `downloads/movies/` or `downloads/tv-shows/` under a
+  `<Title> (<Year>)` / `<Show> (<Year>)/Season NN/` layout. English subtitles
+  are fetched automatically and named so your media server picks them up.
+- **Monitor** (optional) — for shows you add, the daemon checks for new
+  episodes on a schedule, downloads and imports them automatically.
 
 ## Library layout
 
@@ -151,27 +103,59 @@ downloads/
                                                        <...>.en.srt
 ```
 
-Staging lives in `downloads/movies/.incomplete/` and `downloads/tv-shows/.incomplete/` (never scanned
-as library). Names follow Sonarr/Radarr conventions so Plex/Jellyfin identify files and subtitles
-without manual matching. Import tries a hardlink first, falls back to copy on `EXDEV`/failure, then to
-move only when `import_mode = "move"`. Collisions: identical size+hash → skip; else `.1`/`.2` suffix;
-`--overwrite` replaces. Sibling subtitles are renamed to `<basename>.<lang>.<ext>` so the language
-track is recognized.
+Files in `.incomplete/` subfolders are never treated as library. If two files
+with the same name exist, identical ones are skipped and different ones get a
+`.1` / `.2` suffix.
 
-## Seeding policy
+## Configuration
 
-`ratio` (stop at `seed_ratio`), `time` (stop after `seed_time_hours`), `manual` (never auto-remove),
-`remove_on_import` (remove torrent data right after a successful **copy** import). Hardlink imports
-keep the data in place so seeding can continue (the trade-off is printed once per run).
-`remove_on_import` + `hardlink` is refused — it would delete the library's only copy.
+`arr config init` writes a documented template; `arr config show` prints the
+effective settings (secrets are redacted). The file lives at
+`%APPDATA%\arr\config.toml` (Windows) or `~/.config/arr/config.toml`
+(Linux/macOS) — override with `--config <path>`.
 
-## Subtitles
+Nothing needs to be configured to get started. The important settings are
+`download_root`, `library_root`, and the Transmission connection
+(`transmission_rpc_*`). Everything else has sensible defaults.
 
-Default: every imported movie/episode gets an English subtitle next to the media as
-`<basename>.en.srt`. Source priority: sibling subtitles in the torrent → Subscene (scraped, primary) →
-YIFY Subtitles (scraped, fallback) → skip with a warning and record `missing`. TV lookups use
-`imdb_id` + season + episode; movies use `imdb_id` or title. `subtitles_forced_only` filters to forced
-tracks. A scrape failure (network error, HTML change, or block) records `error` and retries on the next
-daemon tick without blocking the import. `subtitles_enabled = false` disables the whole subsystem. The
-`subtitles` table records media path, language, source (`sibling`/`embedded`/`subscene`/`yify`/
-`missing`), state, and the source subtitle id.
+## Running on a server (ZimaOS)
+
+`docker-compose.yml` carries a `x-casaos` block so ZimaOS can import it
+directly: Settings → App Store → *Import from compose file* → select
+`docker-compose.yml`. The app appears as **Onyx Media Discovery &
+Downloader**, exposing the web dashboard on port 3698 plus the Transmission
+ports (9091, 51413 tcp/udp). The `id` and `icon` fields are placeholders until
+the repository is published — point them at the public repo, then re-import.
+
+## Troubleshooting
+
+- **Dashboard won't open / port busy** — something else is already using port
+  3698; find it with `netstat -ano | grep :3698` and stop it, or change the
+  port.
+- **No results for a search** — the indexers are public and may be slow or
+  temporarily unreachable; try again, and check that Torrentio (if used) is
+  running.
+- **Downloads never start** — the web UI starts Transmission automatically, so if nothing downloads, make sure Transmission is installed and the daemon is reachable on `127.0.0.1:9091` (or the port in your config).
+- **Old anime episodes missing** — Nyaa only returns its ~30 most recent
+  uploads, so very old episodes can legitimately not appear.
+
+## Developers
+
+```sh
+uv sync
+uv run pytest
+uv run ruff check .
+uv run mypy arr
+```
+
+Frontend (the web dashboard) lives in `frontend/`:
+
+```sh
+cd frontend && npm install && npm run build
+```
+
+The compiled SPA is written to `src/arr/web/static/dist/` (gitignored).
+
+## License
+
+MIT — see [LICENSE](LICENSE).
