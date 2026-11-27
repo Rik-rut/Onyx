@@ -94,3 +94,11 @@ def test_image_uses_published_registry_without_build_block() -> None:
     assert service["image"] == "ghcr.io/rik-rut/onyx:latest"
     assert "build" not in service
     assert service["environment"] == ["PUID=1000", "PGID=1000", "TZ=UTC"]
+
+
+def test_entrypoint_uses_valid_transmission_and_arr_flags() -> None:
+    raw = (REPO_ROOT / "docker-entrypoint.sh").read_bytes()
+    assert b"\r\n" not in raw, "docker-entrypoint.sh must use LF line endings"
+    text = raw.decode("utf-8")
+    assert "--foreground=false" not in text
+    assert "--config /config/config.toml web" in text

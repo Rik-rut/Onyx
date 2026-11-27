@@ -27,7 +27,7 @@ torrentio_base_url = "http://localhost:8085"
 EOF
 fi
 
-# Start transmission-daemon in the background
+# Start transmission-daemon in the background (daemonizes by default when -f/--foreground is omitted)
 echo "[ARR] Starting transmission-daemon..."
 transmission-daemon \
   --config-dir /config/transmission \
@@ -35,12 +35,11 @@ transmission-daemon \
   --incomplete-dir /downloads/incomplete \
   --peerport 51413 \
   --allowed "*.*.*.*" \
-  --no-auth \
-  --foreground=false
+  --no-auth
 
 # Wait briefly for transmission-daemon to start listening
 sleep 1
 
 # Launch ARR Web Dashboard
 echo "[ARR] Launching ARR Web Dashboard on 0.0.0.0:3698..."
-exec uv run arr web --host 0.0.0.0 --port 3698 --config /config/config.toml
+exec uv run --no-sync arr --config /config/config.toml web --host 0.0.0.0 --port 3698 --no-open-browser
