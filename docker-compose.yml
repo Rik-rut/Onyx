@@ -42,7 +42,7 @@ x-casaos:
   description:
     en_US: Onyx autonomously discovers, downloads, and organises movies and TV shows with zero API keys.
   author: Onyx Team
-  developer: Onyx Team
+  developer: Rikrut
   category: Media
   architectures:
     - amd64
