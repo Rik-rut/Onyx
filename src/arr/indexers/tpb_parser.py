@@ -27,6 +27,7 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
+from urllib.parse import quote_plus
 
 from selectolax.lexbor import LexborHTMLParser
 
@@ -40,6 +41,8 @@ logger = logging.getLogger(__name__)
 # search URLs.
 TV_CATEGORY_CODES = ["205", "208", "212"]
 MOVIE_CATEGORY_CODES = ["200", "207", "211"]
+_APIBAY_TV_CODES = {"205", "208", "212"}
+_APIBAY_MOVIE_CODES = {"201", "202", "207", "209", "211"}
 
 _SIZE_RE = re.compile(r"([\d.]+)\s*(kib|kb|mib|mb|gib|gb|tib|tb|b)?", re.IGNORECASE)
 _SIZE_UNITS = {
@@ -156,10 +159,7 @@ def parse_row(
             raise SchemaMismatchError("tpb", "", "missing magnet URI in row")
 
         # Build magnet with trackers if not already present
-        if trackers and "tracker" not in magnet.lower():
-            tracker_str = "&".join(f"tr={t}" for t in trackers)
-            separator = "&" if "?" in magnet else "?"
-            magnet = f"{magnet}{separator}{tracker_str}"
+        magnet = _append_trackers(magnet, trackers)
 
         # The hidden input carries the exact byte count; the visible text
         # is a fallback only.
@@ -204,6 +204,63 @@ def parse_row(
     except Exception as exc:
         logger.warning("Malformed TPB row: %s", exc)
         return None
+
+
+def _append_trackers(magnet: str, trackers: list[str] | None) -> str:
+    """Append tracker query parameters to a magnet URI when absent."""
+    if trackers and "tracker" not in magnet.lower():
+        tracker_str = "&".join(f"tr={t}" for t in trackers)
+        separator = "&" if "?" in magnet else "?"
+        return f"{magnet}{separator}{tracker_str}"
+    return magnet
+
+
+def _media_type_from_code(category_code: str, fallback: MediaType) -> MediaType:
+    """Map a numeric TPB/apibay category code to a MediaType."""
+    code = str(category_code or "").strip()
+    if code in _APIBAY_TV_CODES:
+        return MediaType.TV
+    if code in _APIBAY_MOVIE_CODES:
+        return MediaType.MOVIE
+    return fallback
+
+
+def parse_apibay_json(
+    payload: object,
+    trackers: list[str] | None = None,
+    media_type: MediaType = MediaType.MOVIE,
+) -> list[Release]:
+    """Parse an apibay.org ``q.php`` JSON array into Releases."""
+    if not isinstance(payload, list):
+        raise SchemaMismatchError("tpb", "", "expected JSON list from apibay")
+
+    releases: list[Release] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        item_id = str(item.get("id", "")).strip()
+        title = str(item.get("name", "")).strip()
+        infohash = str(item.get("info_hash", "")).strip().lower()
+        # apibay returns a single sentinel row with id="0" when nothing matches.
+        if item_id == "0" or not title or not infohash or infohash == "0" * 40:
+            continue
+        magnet = _append_trackers(
+            f"magnet:?xt=urn:btih:{infohash}&dn={quote_plus(title)}",
+            trackers,
+        )
+        releases.append(
+            Release(
+                indexer="tpb",
+                title=title,
+                infohash=infohash,
+                magnet=magnet,
+                media_type=_media_type_from_code(str(item.get("category", "")), media_type),
+                seeds=parse_int(str(item.get("seeders", 0))),
+                peers=parse_int(str(item.get("leechers", 0))),
+                size_bytes=parse_int(str(item.get("size", 0))),
+            )
+        )
+    return releases
 
 
 def _hash_from_magnet(magnet: str) -> str:

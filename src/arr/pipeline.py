@@ -896,7 +896,8 @@ async def _fan_out(q: Query, cfg: Config) -> list[Release]:
         try:
             return await asyncio.wait_for(a.search(q), timeout=30.0)
         except Exception as e:
-            print(f"warning: indexer {a.name} failed: {e}", file=sys.stderr)
+            detail = f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
+            print(f"warning: indexer {a.name} failed: {detail}", file=sys.stderr)
             return []
 
     groups = await asyncio.gather(*[_one(a) for a in adapters])

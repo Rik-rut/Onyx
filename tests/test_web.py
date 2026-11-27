@@ -701,7 +701,7 @@ def test_docker_and_compose_spec_validity() -> None:
     assert entrypoint.exists()
     entrypoint_content = entrypoint.read_text(encoding="utf-8")
     assert "transmission-daemon" in entrypoint_content
-    assert "arr web" in entrypoint_content
+    assert "--config /config/config.toml web" in entrypoint_content
 
     compose = Path("docker-compose.yml")
     assert compose.exists()

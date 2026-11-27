@@ -508,12 +508,13 @@ def test_tpb_adapter_search_stubbed_browser():
     from arr.core.models import Query
     from arr.indexers.tpb import TpbAdapter
 
-    adapter = TpbAdapter("https://thepiratebay.org", http())
+    adapter = TpbAdapter("https://thepiratebay.org", http(), api_base_url="")
 
     mock_context = AsyncMock()
     mock_page = AsyncMock()
     mock_page.content = AsyncMock(return_value=open("tests/fixtures/tpb_tv_search.html", encoding="utf-8").read())
     mock_page.goto = AsyncMock(return_value=MagicMock())
+    mock_page.wait_for_selector = AsyncMock()
     mock_page.close = AsyncMock()
     mock_context.new_page = AsyncMock(return_value=mock_page)
 
@@ -538,12 +539,13 @@ def test_tpb_search_appends_season_episode_tokens():
     from arr.core.models import Query
     from arr.indexers.tpb import TpbAdapter
 
-    adapter = TpbAdapter("https://thepiratebay.org", http())
+    adapter = TpbAdapter("https://thepiratebay.org", http(), api_base_url="")
 
     mock_context = AsyncMock()
     mock_page = AsyncMock()
     mock_page.content = AsyncMock(return_value="")
     mock_page.goto = AsyncMock(return_value=MagicMock())
+    mock_page.wait_for_selector = AsyncMock()
     mock_page.close = AsyncMock()
     mock_context.new_page = AsyncMock(return_value=mock_page)
 
@@ -568,6 +570,134 @@ def test_tpb_search_appends_season_episode_tokens():
             )
         )
         assert "S02" not in mock_page.goto.call_args[0][0]
+
+
+def test_tpb_apibay_fast_path_and_movie_category_fallback(tmp_path):
+    """TPB queries apibay.org JSON API first, drops movie rows on TV, and retries cat=200."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from arr.core.models import Query
+    from arr.indexers.tpb import TpbAdapter
+
+    tv_payload = [
+        {
+            "id": "82945081",
+            "name": "Breaking.Bad.S01E01.Pilot.1080p.HEVC.x265-MeGusta",
+            "info_hash": "0C9FA2CB87DA2D5FCCD4AF71FB1E0A7E7638B4E9",
+            "leechers": "13",
+            "seeders": "53",
+            "size": "1193049621",
+            "category": "208",
+        },
+        {
+            "id": "99999999",
+            "name": "Breaking Bad Documentary",
+            "info_hash": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "leechers": "1",
+            "seeders": "10",
+            "size": "500000000",
+            "category": "207",
+        },
+    ]
+
+    calls: list[dict[str, str]] = []
+
+    def fake_tv_get(url, *, params, timeout):
+        calls.append(dict(params))
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json.return_value = tv_payload
+        resp.content = b""
+        return resp
+
+    isolated = HttpClient(cfg(), cache_dir=tmp_path)
+    adapter = TpbAdapter("https://thepiratebay.org", isolated, api_get=fake_tv_get)
+
+    with patch.object(adapter._browser, "get_context", new_callable=AsyncMock) as mock_ctx:
+        releases = asyncio.run(
+            adapter.search(
+                Query(media_type=MediaType.TV, text="Breaking Bad", season=1, episode=1)
+            )
+        )
+
+    assert calls == [{"q": "Breaking Bad S01E01"}]
+    mock_ctx.assert_not_called()
+    assert len(releases) == 1
+    assert releases[0].title == "Breaking.Bad.S01E01.Pilot.1080p.HEVC.x265-MeGusta"
+    assert releases[0].infohash == "0c9fa2cb87da2d5fccd4af71fb1e0a7e7638b4e9"
+    assert releases[0].seeds == 53
+    assert releases[0].media_type == MediaType.TV
+
+    movie_empty = [
+        {"id": "0", "name": "No results returned", "info_hash": "0" * 40, "category": "0"}
+    ]
+    movie_hit = [
+        {
+            "id": "7349754",
+            "name": "Inception (2010) 1080p BrRip x264",
+            "info_hash": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+            "leechers": "20",
+            "seeders": "838",
+            "size": "1980000000",
+            "category": "207",
+        }
+    ]
+    m_calls: list[dict[str, str]] = []
+
+    def fake_movie_get(url, *, params, timeout):
+        m_calls.append(dict(params))
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json.return_value = movie_hit if params.get("cat") == "200" else movie_empty
+        resp.content = b""
+        return resp
+
+    isolated2 = HttpClient(cfg(), cache_dir=tmp_path / "m")
+    adapter2 = TpbAdapter("https://thepiratebay.org", isolated2, api_get=fake_movie_get)
+    m_releases = asyncio.run(
+        adapter2.search(Query(media_type=MediaType.MOVIE, text="Inception"))
+    )
+
+    assert m_calls == [{"q": "Inception"}, {"q": "Inception", "cat": "200"}]
+    assert len(m_releases) == 1
+    assert m_releases[0].seeds == 838
+    assert m_releases[0].media_type == MediaType.MOVIE
+
+
+def test_tpb_falls_back_to_browser_when_apibay_fails(tmp_path):
+    """When apibay.org errors, TpbAdapter falls back to the Playwright browser."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from arr.core.models import Query
+    from arr.indexers.tpb import TpbAdapter
+
+    def failing_get(url, *, params, timeout):
+        resp = MagicMock()
+        resp.status_code = 502
+        return resp
+
+    isolated = HttpClient(cfg(), cache_dir=tmp_path)
+    adapter = TpbAdapter("https://thepiratebay.org", isolated, api_get=failing_get)
+
+    mock_context = AsyncMock()
+    mock_page = AsyncMock()
+    mock_page.content = AsyncMock(
+        return_value=open("tests/fixtures/tpb_tv_search.html", encoding="utf-8").read()
+    )
+    mock_page.goto = AsyncMock(return_value=MagicMock())
+    mock_page.wait_for_selector = AsyncMock()
+    mock_page.close = AsyncMock()
+    mock_context.new_page = AsyncMock(return_value=mock_page)
+
+    with patch.object(
+        adapter._browser, "get_context", new_callable=AsyncMock, return_value=mock_context
+    ):
+        releases = asyncio.run(
+            adapter.search(Query(media_type=MediaType.TV, text="Breaking Bad"))
+        )
+
+    assert len(releases) > 0
+    mock_page.goto.assert_called_once()
 
 
 def test_build_adapters_includes_tpb_when_enabled():

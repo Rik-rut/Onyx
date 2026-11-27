@@ -81,30 +81,46 @@ class BrowserSession:
         self._loop = asyncio.get_running_loop()
         user_data_dir = self._cache_dir
         user_data_dir.mkdir(parents=True, exist_ok=True)
+        for lock_name in ("SingletonLock", "SingletonSocket", "SingletonCookie"):
+            lock_path = user_data_dir / lock_name
+            if lock_path.exists() or lock_path.is_symlink():
+                try:
+                    lock_path.unlink()
+                except OSError:
+                    pass
 
         pw = async_playwright()
         self._pw = await pw.__aenter__()
-        launch_args = {"args": ["--no-sandbox"]}
-        # Prefer the requested channel (e.g. system Chrome); "chromium"
-        # selects the bundled build straight away.
-        channel = (
-            self._channel if self._channel and self._channel != "chromium" else None
-        )
-        if channel:
-            try:
-                self._context = await self._pw.chromium.launch_persistent_context(
-                    str(user_data_dir), channel=channel, **launch_args
-                )
-                return
-            except Exception as exc:
-                logger.warning(
-                    "Browser channel %r unavailable (%s); falling back to bundled Chromium",
-                    channel,
-                    exc,
-                )
-        self._context = await self._pw.chromium.launch_persistent_context(
-            str(user_data_dir), **launch_args
-        )
+        try:
+            launch_args = {"args": ["--no-sandbox"]}
+            # Prefer the requested channel (e.g. system Chrome); "chromium"
+            # selects the bundled build straight away.
+            channel = (
+                self._channel if self._channel and self._channel != "chromium" else None
+            )
+            if channel:
+                try:
+                    self._context = await self._pw.chromium.launch_persistent_context(
+                        str(user_data_dir), channel=channel, **launch_args
+                    )
+                    return
+                except Exception as exc:
+                    logger.warning(
+                        "Browser channel %r unavailable (%s); falling back to bundled Chromium",
+                        channel,
+                        exc,
+                    )
+            self._context = await self._pw.chromium.launch_persistent_context(
+                str(user_data_dir), **launch_args
+            )
+        except BaseException:
+            if self._pw is not None:
+                try:
+                    await self._pw.stop()
+                except Exception:
+                    pass
+                self._pw = None
+            raise
 
     def __del__(self) -> None:
         """Best-effort close on GC.

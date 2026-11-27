@@ -70,6 +70,8 @@ class HttpClient:
         key: str = "default",
         ttl_seconds: float = 0,
         params: dict | None = None,
+        timeout: float = 20.0,
+        retries: int = 4,
     ) -> httpx.Response:
         if ttl_seconds > 0:
             cached = self.cache_get(url + json.dumps(params or {}, sort_keys=True), ttl_seconds)
@@ -78,20 +80,21 @@ class HttpClient:
         await self._throttle(key)
         headers = {"User-Agent": str(self.cfg.get("user_agent", "arr/0.1"))}
         last_exc: Exception | None = None
-        for attempt in range(4):
+        for attempt in range(retries):
             try:
-                async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+                async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
                     resp = await client.get(url, params=params, headers=headers)
                 if resp.status_code in (429, 503):
                     delay = (2**attempt) + random.uniform(0, 0.5)
                     await asyncio.sleep(delay)
                     continue
-                if ttl_seconds > 0:
+                if ttl_seconds > 0 and resp.status_code == 200:
                     self.cache_put(url + json.dumps(params or {}, sort_keys=True), resp.content)
                 return resp
             except httpx.HTTPError as e:
                 last_exc = e
-                await asyncio.sleep((2**attempt) + random.uniform(0, 0.5))
+                if attempt + 1 < retries:
+                    await asyncio.sleep(min(2**attempt, 4) + random.uniform(0, 0.5))
         raise IndexerError(f"GET {url} failed after retries: {last_exc}")
 
 
