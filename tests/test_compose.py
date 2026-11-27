@@ -47,7 +47,7 @@ def test_top_level_casaos_block_has_required_fields() -> None:
     assert casaos["index"] == "/"
     assert casaos["port_map"] == "3698"
     assert casaos["scheme"] == "http"
-    assert casaos["version"] == "0.1.0"
+    assert casaos["version"] == "0.1.1"
     assert casaos["category"] == "Media"
     assert casaos["architectures"] == ["amd64", "arm64"]
 
@@ -64,7 +64,7 @@ def test_locale_fields_use_en_us_objects() -> None:
 def test_icon_points_at_the_repo_asset() -> None:
     icon = load_compose()["x-casaos"]["icon"]
     assert icon.startswith("https://raw.githubusercontent.com/")
-    assert icon.endswith("/main/assets/onyx.svg")
+    assert icon.endswith("/master/assets/onyx.svg")
     # The asset must exist in the repo (the URL path mirrors it).
     assert (REPO_ROOT / "assets" / "onyx.svg").is_file()
 
@@ -78,7 +78,6 @@ def test_no_service_level_casaos_blocks() -> None:
 def test_ports_are_static() -> None:
     ports = load_compose()["services"]["onyx"]["ports"]
     assert ports == ["3698:3698", "9091:9091", "51413:51413", "51413:51413/udp"]
-    assert load_compose()["services"]["torrentio-scraper"]["ports"] == ["8085:8080"]
 
 
 def test_library_volumes_use_zimaos_import_paths() -> None:

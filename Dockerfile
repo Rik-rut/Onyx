@@ -17,8 +17,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Install uv binary from official image
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+# Install uv via the official installer (fetches from GitHub releases),
+# avoiding a ghcr.io pull so the build works on hosts whose registry
+# mirrors do not resolve ghcr.
+RUN curl -fsSL https://astral.sh/uv/install.sh | sh
+ENV PATH="/root/.local/bin:$PATH"
 
 WORKDIR /app
 

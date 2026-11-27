@@ -152,14 +152,6 @@ services:
       - /DATA/AppData/onyx/config:/config
       - /DATA/AppData/onyx/downloads/movies:/downloads/movies
       - /DATA/AppData/onyx/downloads/tv-shows:/downloads/tv-shows
-  torrentio-scraper:
-    image: ghcr.io/th3r0b/torrentio-scraper:latest
-    container_name: torrentio-scraper
-    restart: unless-stopped
-    ports:
-      - "8085:8080"
-    environment:
-      - PROVIDERS=YTS,EZTV,Nyaa,1337x,ThePirateBay
 x-casaos:
   id: com.onyx.media
   main: onyx
@@ -179,7 +171,7 @@ x-casaos:
   architectures:
     - amd64
     - arm64
-  version: "0.1.0"
+  version: "0.1.1"
 ```
 
 ## Troubleshooting
